@@ -213,9 +213,12 @@ def product_image(name):
 
 # ---------------------------------------------------------------- keyboards
 
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://muse.ai/s/space-2-ld5xytfxovkxaxt")
+
 def main_keyboard():
     """Main menu as 2-column inline grid matching the reference design."""
     return {"inline_keyboard": [
+        [{"text": "🌐 فتح المتجر الملون 🎨", "web_app": {"url": WEBAPP_URL}}],
         [{"text": "🛍️ المتجر", "callback_data": "menu:shop"},
          {"text": "📦 طلباتي", "callback_data": "menu:orders"}],
         [{"text": "⏳ حجوزاتي", "callback_data": "menu:reservations"},
@@ -418,9 +421,10 @@ def handle_menu(chat_id, section, user_name):
              {"inline_keyboard": [
                  [{"text": "🇺🇸 English", "callback_data": "lang:en"},
                   {"text": "🇸🇦 العربية", "callback_data": "lang:ar"}],
-                 [{"text": "🇫🇷 Français", "callback_data": "lang:fr"},
-                  {"text": "🇨🇳 中文", "callback_data": "lang:zh"}],
-                 [{"text": "⬅️ رجوع للقائمة", "callback_data": "menu:main"}]]})
+                 [{"text": "🇷🇺 Русский", "callback_data": "lang:ru"},
+                  {"text": "🇫🇷 Français", "callback_data": "lang:fr"}],
+                 [{"text": "🇨🇳 中文", "callback_data": "lang:zh"},
+                  {"text": "⬅️ رجوع للقائمة", "callback_data": "menu:main"}]]})
     elif section == "reseller":
         send(chat_id,
              "🔑 <b>بوابة الموزعين</b>\n\nهذه المنطقة مخصصة للموزعين المعتمدين.\n"
@@ -503,7 +507,8 @@ def handle_update(u):
             if data.startswith("menu:"):
                 handle_menu(chat_id, data[5:], name)
             elif data.startswith("lang:"):
-                lang_names = {"en": "English", "ar": "العربية", "fr": "Français", "zh": "中文"}
+                lang_names = {"en": "English", "ar": "العربية", "ru": "Русский",
+                              "fr": "Français", "zh": "中文"}
                 send(chat_id, f"✅ تم اختيار اللغة: {lang_names.get(data[5:], data[5:])}",
                      back_to_menu_kb())
                 answer = "تم ✅"
