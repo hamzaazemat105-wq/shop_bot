@@ -60,16 +60,14 @@ try:
 except Exception:
     PAYMENT_METHODS = []
 if not PAYMENT_METHODS:
-    # fallback defaults (override via env)
+    # Only Binance Pay + USDT (Cash Plus and Bank removed per Hamza 2026-10-05)
     PAYMENT_METHODS = [
         {"key": "binance", "name": "Binance Pay", "emoji": "🟡",
-         "instructions": "حوّل المبلغ إلى Binance Pay ID الخاص بالمتجر، ثم أرسل لقطة الشاشة هنا."},
-        {"key": "usdt", "name": "USDT", "emoji": "💵",
-         "instructions": "حوّل USDT (BEP20 أو TRC20) إلى عنوان المحفظة، ثم أرسل لقطة الشاشة هنا."},
-        {"key": "cashplus", "name": "Cash Plus", "emoji": "🏪",
-         "instructions": "أرسل المبلغ عبر Cash Plus إلى الرقم الخاص بالمتجر، ثم أرسل لقطة الشاشة هنا."},
-        {"key": "bank", "name": "تحويل بنكي", "emoji": "🏦",
-         "instructions": "حوّل المبلغ إلى الحساب البنكي الخاص بالمتجر، ثم أرسل لقطة الشاشة هنا."},
+         "instructions": "🟡 <b>Binance Pay ID:</b> <code>718842303</code>\n\nحوّل المبلغ الدقيق إلى هاد الـID، ثم اضغط زر \"✅ تم الدفع\" وأرسل لقطة الشاشة أو رقم العملية."},
+        {"key": "usdt_bep20", "name": "USDT (BEP20)", "emoji": "💵",
+         "instructions": "💵 <b>USDT BEP20 (BSC):</b>\n<code>0x95d047dcb7fa90fd97a2f04965c8d71fa4b4aebb</code>\n\nحوّل المبلغ الدقيق إلى هاد العنوان، ثم اضغط زر \"✅ تم الدفع\" وأرسل لقطة الشاشة أو رقم العملية (TxID)."},
+        {"key": "usdt_trc20", "name": "USDT (TRC20)", "emoji": "💵",
+         "instructions": "💵 <b>USDT TRC20 (TRX):</b>\n<code>TMRLAQXPECALME55ZGZm52D6jSyAtfxkSu</code>\n\nحوّل المبلغ الدقيق إلى هاد العنوان، ثم اضغط زر \"✅ تم الدفع\" وأرسل لقطة الشاشة أو رقم العملية (TxID)."},
     ]
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -353,7 +351,9 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
         "status": "awaiting_payment", "created_at": int(time.time()),
     }
     USER_STATE.pop(str(chat_id), None)
-    kb = {"inline_keyboard": [[{"text": "❌ إلغاء الطلب", "callback_data": f"cancel:{oid}"}]]}
+    kb = {"inline_keyboard": [
+        [{"text": "✅ تم الدفع", "callback_data": f"paid:{oid}"}],
+        [{"text": "❌ إلغاء الطلب", "callback_data": f"cancel:{oid}"}]]}
     send(chat_id,
          f"🧾 <b>تأكيد الطلب</b>\n\n"
          f"📦 المنتج: <b>{esc(prod_name(p))}</b>\n"
@@ -361,7 +361,9 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
          f"💰 المجموع: <b>${total}</b>\n"
          f"💳 الدفع عبر: <b>{esc(m['name'])}</b>\n\n"
          f"📋 <b>التعليمات:</b>\n{esc(m.get('instructions',''))}\n\n"
-         f"📸 بعد التحويل، <b>أرسل لقطة شاشة</b> هنا في المحادثة.\n"
+         f"1️⃣ حوّل المبلغ الدقيق\n"
+         f"2️⃣ اضغط زر <b>✅ تم الدفع</b>\n"
+         f"3️⃣ أرسل <b>لقطة شاشة</b> أو <b>رقم العملية (TxID)</b>\n\n"
          f"سيتم إرسال المنتج إليك مباشرة بعد التأكيد.",
          kb)
 
@@ -430,15 +432,7 @@ def handle_menu(chat_id, section, user_name):
 def back_to_menu_kb():
     return {"inline_keyboard": [[{"text": "⬅️ رجوع للقائمة", "callback_data": "menu:main"}]]}
 
-def handle_photo(chat_id, message_id, user_name):
-    pend = [(oid, o) for oid, o in ORDERS.items()
-            if str(o["user_chat_id"]) == str(chat_id) and o["status"] == "awaiting_payment"]
-    if not pend:
-        send(chat_id, "ليس لديك طلب بانتظار الدفع. ابدأ من 🛍️ المتجر.", main_keyboard())
-        return
-    oid, o = pend[-1]
-    o["status"] = "awaiting_approval"
-    send(chat_id, "✅ توصلنا بإثبات الدفع. سيتم مراجعة طلبك قريباً ⏳")
+def notify_admin_proof(o, oid, user_name, chat_id, proof_block):
     if not ADMIN_CHAT_ID:
         print("NO ADMIN; awaiting:", oid); return
     kb = {"inline_keyboard": [[
@@ -450,7 +444,21 @@ def handle_photo(chat_id, message_id, user_name):
          f"📦 المنتج: <b>{esc(o['product_name'])}</b> × {o['qty']}\n"
          f"💰 المجموع: <b>${o['total']}</b>\n"
          f"💳 الدفع: {esc(o['pay_method'])}\n"
-         f"🔖 الرقم: <code>{esc(oid)}</code>\n\nإثبات الدفع 👇", kb)
+         f"🔖 الرقم: <code>{esc(oid)}</code>\n\n{proof_block}", kb)
+
+def handle_photo(chat_id, message_id, user_name):
+    pend = [(oid, o) for oid, o in ORDERS.items()
+            if str(o["user_chat_id"]) == str(chat_id)
+            and o["status"] in ("awaiting_payment", "awaiting_proof")]
+    if not pend:
+        send(chat_id, "ليس لديك طلب بانتظار الدفع. ابدأ من 🛍️ المتجر.", main_keyboard())
+        return
+    oid, o = pend[-1]
+    o["status"] = "awaiting_approval"
+    o["proof_type"] = "photo"
+    USER_STATE.pop(str(chat_id), None)
+    send(chat_id, "✅ توصلنا بإثبات الدفع. سيتم مراجعة طلبك قريباً ⏳")
+    notify_admin_proof(o, oid, user_name, chat_id, "📸 إثبات الدفع (صورة) 👇")
     tg("forwardMessage", {"chat_id": ADMIN_CHAT_ID, "from_chat_id": chat_id,
                           "message_id": message_id})
 
@@ -518,6 +526,23 @@ def handle_update(u):
             elif data.startswith("pay:"):
                 _, pid, q, key = data.split(":")
                 create_order(chat_id, name, pid, int(q), key)
+            elif data.startswith("paid:"):
+                oid = data[5:]
+                o = ORDERS.get(oid)
+                if o and str(o["user_chat_id"]) == str(chat_id):
+                    if o["status"] == "awaiting_payment":
+                        o["status"] = "awaiting_proof"
+                        USER_STATE[str(chat_id)] = {"step": "proof", "order_id": oid}
+                        send(chat_id,
+                             "📸 <b>أرسل دليل الدفع:</b>\n\n"
+                             "• لقطة شاشة للتحويل، <b>أو</b>\n"
+                             "• رقم العملية (TxID / 🆔)\n\n"
+                             "اكتب الرقم أو أرسل الصورة هنا 👇")
+                        answer = "أرسل الدليل"
+                    else:
+                        answer = "الطلب قيد المعالجة."
+                else:
+                    answer = "الطلب غير موجود."
             elif data.startswith("cancel:"):
                 oid = data[7:]
                 o = ORDERS.get(oid)
@@ -553,6 +578,20 @@ def handle_update(u):
             send(chat_id, f"⚠️ المخزون المتوفر: {stock_of(p)} فقط."); return
         show_payment_methods(chat_id, pid, q)
         return
+
+    # transaction ID / proof text input
+    st = USER_STATE.get(str(chat_id))
+    if st and st.get("step") == "proof" and text:
+        oid = st.get("order_id")
+        o = ORDERS.get(oid)
+        if o and o["status"] == "awaiting_proof":
+            o["status"] = "awaiting_approval"
+            o["proof_type"] = "txid"
+            o["proof_text"] = text[:200]
+            USER_STATE.pop(str(chat_id), None)
+            send(chat_id, "✅ توصلنا برقم العملية. سيتم مراجعة طلبك قريباً ⏳")
+            notify_admin_proof(o, oid, user_name, chat_id, f"🆔 رقم العملية:\n<code>{esc(text[:200])}</code>")
+            return
 
     if text == "/myid":
         send(chat_id, f"🆔 <code>{chat_id}</code>"); return
