@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v9"
+VERSION = "2026-10-06-v10"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
