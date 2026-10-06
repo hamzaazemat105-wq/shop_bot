@@ -36,6 +36,7 @@ import os
 import re
 import threading
 import time
+import traceback
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -354,7 +355,32 @@ def tg(method, params=None):
     data = urllib.parse.urlencode(params or {}).encode()
     req = urllib.request.Request(f"{TG}/{method}", data=data)
     with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
+        res = json.loads(r.read())
+    # Telegram returns HTTP 200 even for API errors -> surface them loudly
+    if isinstance(res, dict) and res.get("ok") is False:
+        raise RuntimeError(f"Telegram API error in {method}: {res.get('description')}")
+    return res
+
+def report_error_to_admin(context, err):
+    """Forward tracebacks to the admin so live bugs are diagnosable."""
+    if not ADMIN_CHAT_ID:
+        print("ERROR", context, err); return
+    tb = traceback.format_exc(limit=6)
+    msg = (f"⚠️ <b>خطأ في البوت</b>\n{esc(context)}\n\n"
+           f"<code>{esc(str(err)[:400])}</code>\n\n"
+           f"<pre>{esc(tb[-1500:])}</pre>")
+    try:
+        send(ADMIN_CHAT_ID, msg)
+    except Exception as e:
+        print("admin error report failed:", e)
+
+def sanitize_label(s, limit=60):
+    """Make button text safe: strip control chars/lone surrogates, cap length."""
+    s = str(s or "")
+    s = re.sub(r"[\x00-\x1f\x7f]", " ", s)
+    s = s.encode("utf-8", "ignore").decode("utf-8", "ignore")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:limit] if len(s) > limit else s
 
 def esc(s):
     return html.escape(str(s or ""), quote=False)
@@ -482,8 +508,8 @@ def brand_keyboard():
     kb, row = [], []
     for b in sorted(brands):
         info = brands[b]
-        row.append({"text": f"{brand_emoji(b)} {b} · {info['total']}",
-                    "callback_data": f"brand:{b}"})
+        label = sanitize_label(f"{brand_emoji(b)} {b} · {info['total']}")
+        row.append({"text": label, "callback_data": f"brand:{b}"})
         if len(row) == 3:
             kb.append(row); row = []
     if row: kb.append(row)
@@ -503,15 +529,15 @@ def show_brand_products(chat_id, brand):
         send(chat_id, t("no_products", chat_id))
         return
     kb = []
-    for p in products:
+    for p in products[:50]:  # safety cap: Telegram allows max 100 buttons
         pid = p.get("id")
         st = stock_of(p)
         mark = "✅" if st > 0 else "❌"
-        label = f"{mark} {prod_name(p)[:30]} — ${cust_price(p)}"
+        label = sanitize_label(f"{mark} {prod_name(p)[:30]} — ${cust_price(p)}")
         kb.append([{"text": label, "callback_data": f"product:{pid}"}])
     kb.append([{"text": t("back_brands", chat_id), "callback_data": "back_brands"}])
     send(chat_id,
-         f"{brand_emoji(brand)} <b>{esc(brand)}</b> — {t('choose_product', chat_id)}",
+         f"{brand_emoji(brand)} <b>{esc(sanitize_label(brand, 40))}</b> — {t('choose_product', chat_id)}",
          {"inline_keyboard": kb})
 
 def show_product_detail(chat_id, pid):
@@ -975,8 +1001,13 @@ def handle_update(u):
             elif data.startswith("reject:"):
                 answer = admin_decision(chat_id, data[7:], False)
         except Exception as e:
-            print("callback error:", e); answer = "⚠️ حدث خطأ"
-        tg("answerCallbackQuery", {"callback_query_id": cb["id"], "text": answer[:190]})
+            print("callback error:", e)
+            report_error_to_admin(f"callback: {data[:80]}", e)
+            answer = "⚠️ حدث خطأ"
+        try:
+            tg("answerCallbackQuery", {"callback_query_id": cb["id"], "text": answer[:190]})
+        except Exception as e:
+            print("answerCallbackQuery failed:", e)
         return
 
     msg = u.get("message") or {}
@@ -1107,7 +1138,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def process(update):
     try: handle_update(update)
-    except Exception as e: print("handler error:", e)
+    except Exception as e:
+        print("handler error:", e)
+        report_error_to_admin("update handler", e)
 
 def main():
     url = f"{PUBLIC_URL}/webhook/{WEBHOOK_SECRET}"
