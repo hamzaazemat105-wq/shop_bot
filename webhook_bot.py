@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v15"
+VERSION = "2026-10-06-v16"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -425,7 +425,8 @@ def shop(path, method="GET", data=None):
     url = SHOP + path
     body = json.dumps(data).encode() if data else None
     req = urllib.request.Request(url, data=body, method=method)
-    req.add_header("X-API-Key", SHOP_API_KEY)
+    # Bastaha API uses Bearer auth (also accepts X-API-Key)
+    req.add_header("Authorization", f"Bearer {SHOP_API_KEY}")
     req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read())
@@ -436,7 +437,7 @@ def refresh_products(force=False):
     if not force and time.time() - PRODUCTS["ts"] < 120 and PRODUCTS["items"]:
         return PRODUCTS["items"]
     try:
-        res = shop("/api/products")
+        res = shop("/products")
         items = res.get("products", res.get("items", [])) if isinstance(res, dict) else res
         PRODUCTS["items"] = items or []
         PRODUCTS["ts"] = time.time()
@@ -476,7 +477,9 @@ def brand_of(p):
               "group", "collection", "type"):
         v = p.get(k)
         if isinstance(v, str) and v.strip():
-            return v.strip()
+            # normalize via canonical map (e.g. "CHATGPT" -> "ChatGPT")
+            low = v.strip().lower()
+            return _CANONICAL_BRANDS.get(low, v.strip().title())
     # extract brand from product name: "Gemini 18 month link..." -> "Gemini"
     # normalized case-insensitively so "CAPCUT"/"Capcut" merge into one brand
     name = prod_name(p)
@@ -933,22 +936,37 @@ def admin_decision(chat_id, oid, approve):
         refund_order_to_wallet(o)
         send(o["user_chat_id"], t("rejected_msg", o["user_chat_id"]))
         return "تم رفض الطلب."
-    # auto-buy from supplier
+    # auto-buy from supplier (Bastaha API)
     try:
-        res = shop("/api/buy", "POST", {"product_id": o["product_id"], "quantity": o["qty"]})
+        res = shop("/place-order", "POST", {
+            "product_id": o["product_id"],
+            "quantity": o["qty"],
+            "idempotency_key": f"shop-order-{o.get('id', '')}-{o['user_chat_id']}"
+        })
     except Exception as e:
         res = {"ok": False, "error": str(e)}
     if not res.get("ok"):
+        err = res.get("error", {})
+        err_msg = err.get("message", err) if isinstance(err, dict) else err
         send(o["user_chat_id"], t("buy_failed", o["user_chat_id"]))
-        return f"⚠️ فشل الشراء من المزود: {esc(res.get('error',''))}"
-    o["status"] = "delivered"
+        return f"⚠️ فشل الشراء من المزود: {esc(str(err_msg))}"
+    order = res.get("order", {})
+    o["status"] = "delivered" if order.get("status") == "completed" else "processing"
     save_orders()
-    items = res.get("items", [])
+    # Bastaha: delivery.items for instant, None for manual
+    delivery = order.get("delivery") or {}
+    items = delivery.get("items", [])
     if items:
         body = "\n\n".join(f"<code>{esc(i)}</code>" for i in items)
         send(o["user_chat_id"],
              t("delivered_msg", o["user_chat_id"]).format(
                  product=esc(o['product_name']), qty=o['qty'], body=body))
+    elif order.get("status") == "processing":
+        # manual delivery - team will deliver via Telegram
+        send(o["user_chat_id"],
+             t("delivered_msg", o["user_chat_id"]).format(
+                 product=esc(o['product_name']), qty=o['qty'],
+                 body="⏳ التوصيل يدوي — سيصلك المنتج قريباً."))
     else:
         send(o["user_chat_id"], t("delivered_short", o["user_chat_id"]))
     return "✅ تم التأكيد والتسليم."
@@ -1182,14 +1200,12 @@ def handle_update(u):
         return
     if is_admin and (text.startswith("/supbalance") or text.startswith("/محفظتي") or text == "محفظتي"):
         try:
-            me = shop("/api/me")
-            bal = me.get("balance", me.get("credit", me.get("funds", "?")))
-            user = me.get("username", me.get("name", me.get("id", "")))
+            me = shop("/balance")
+            bal = me.get("balance", "?")
             send(chat_id,
-                 f"💰 <b>رصيدك عند المورّد</b>\n\n"
-                 f"👤 الحساب: <code>{esc(str(user))}</code>\n"
-                 f"💵 الرصيد: <b>${esc(str(bal))}</b>\n\n"
-                 f"لشحن الرصيد تواصل مع مول الـ API مباشرة.")
+                 f"💰 <b>رصيدك عند المورّد (Bastaha)</b>\n\n"
+                 f"💵 الرصيد: <b>{esc(str(bal))} USDT</b>\n\n"
+                 f"لشحن الرصيد: افتح بوت Bastaha ← TOPUP.")
         except Exception as e:
             send(chat_id, f"⚠️ تعذر جلب الرصيد: {esc(str(e)[:200])}")
         return
