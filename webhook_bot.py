@@ -240,12 +240,9 @@ def product_image(name):
 
 # ---------------------------------------------------------------- keyboards
 
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://muse.ai/s/space-2-ld5xytfxovkxaxt")
-
 def main_keyboard():
     """Main menu as 2-column inline grid matching the reference design."""
     return {"inline_keyboard": [
-        [{"text": "🌐 فتح المتجر الملون 🎨", "web_app": {"url": WEBAPP_URL}}],
         [{"text": "🛍️ المتجر", "callback_data": "menu:shop"},
          {"text": "📦 طلباتي", "callback_data": "menu:orders"}],
         [{"text": "⏳ حجوزاتي", "callback_data": "menu:reservations"},
