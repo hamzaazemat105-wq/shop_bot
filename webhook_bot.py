@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v11"
+VERSION = "2026-10-06-v12"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -580,22 +580,10 @@ def brand_keyboard():
 def show_brands(chat_id):
     kb, n_prod, n_brand = brand_keyboard()
     kb.append([{"text": t("refresh", chat_id), "callback_data": "brands_refresh"}])
-    caption = (f"{t('brands_title', chat_id)}\n"
-               f"{t('brands_count', chat_id).format(np=n_prod, nb=n_brand)}\n\n"
-               f"{t('stock_legend', chat_id)}")
-    reply_markup = {"inline_keyboard": kb}
-    # try the visual brand catalog (logos grid); fall back to text on any error
-    try:
-        from brand_grid import build_brand_grid
-        brands = sorted({brand_of(p) for p in refresh_products()})
-        if brands:
-            img_path = build_brand_grid(brands)
-            with open(img_path, "rb") as f:
-                if send_photo(chat_id, f.read(), caption, reply_markup):
-                    return
-    except Exception as e:
-        print("brand grid failed:", e)
-    send(chat_id, caption, reply_markup)
+    send(chat_id,
+         f"{t('brands_title', chat_id)}\n{t('brands_count', chat_id).format(np=n_prod, nb=n_brand)}\n\n"
+         f"{t('stock_legend', chat_id)}",
+         {"inline_keyboard": kb})
 
 def show_brand_products(chat_id, brand):
     products = [p for p in refresh_products() if brand_of(p) == brand]
