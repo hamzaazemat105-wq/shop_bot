@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Professional Telegram Shop Bot — Complete Version
-==================================================
+Professional Telegram Shop Bot — Complete Version (i18n: ar/en/ru)
+==================================================================
 Full purchase flow: Brands → Products → Quantity → Payment → Confirmation
 
 Deploy: Railway (or any VPS with public HTTPS)
@@ -26,7 +26,7 @@ Flow:
   → quantity selection (1/2/3/5/10/custom)
   → payment method selection
   → order summary + payment instructions + [❌ إلغاء]
-  → user sends payment screenshot
+  → user taps [✅ تم الدفع] → sends screenshot or TxID
   → admin gets approve/reject buttons
   → on approve: auto-buy from supplier → deliver items to user
 """
@@ -48,17 +48,24 @@ def clean(v):
 BOT_TOKEN   = clean(os.environ["BOT_TOKEN"])
 SHOP_API_KEY = clean(os.environ["SHOP_API_KEY"])
 SHOP_BASE_URL = os.environ.get("SHOP_BASE_URL", "worker-production-53ca.up.railway.app").rstrip("/")
-PUBLIC_URL  = os.environ["PUBLIC_URL"].rstrip("/")
-WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
+PUBLIC_URL  = os.environ.get("PUBLIC_URL", "").rstrip("/")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "devsecret")
+ADMIN_CHAT_ID = (os.environ.get("ADMIN_CHAT_ID") or "").strip()
 MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "Smartshob_bot").lstrip("@")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-try:
-    PAYMENT_METHODS = json.loads(os.environ.get("PAYMENT_METHODS_JSON", "[]"))
-except Exception:
-    PAYMENT_METHODS = []
+TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
+SHOP = f"https://{SHOP_BASE_URL}"
+
+PAYMENT_METHODS = []
+_raw_pm = os.environ.get("PAYMENT_METHODS_JSON", "").strip()
+if _raw_pm:
+    try:
+        PAYMENT_METHODS = json.loads(_raw_pm)
+    except Exception as e:
+        print("PAYMENT_METHODS_JSON parse error:", e)
+
 if not PAYMENT_METHODS:
     # Only Binance Pay + USDT (Cash Plus and Bank removed per Hamza 2026-10-05)
     PAYMENT_METHODS = [
@@ -70,41 +77,198 @@ if not PAYMENT_METHODS:
          "instructions": "💵 <b>USDT TRC20 (TRX):</b>\n<code>TMRLAQXPECALME55ZGZm52D6jSyAtfxkSu</code>\n\nحوّل المبلغ الدقيق إلى هاد العنوان، ثم اضغط زر \"✅ تم الدفع\" وأرسل لقطة الشاشة أو رقم العملية (TxID)."},
     ]
 
-TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
-SHOP = f"https://{SHOP_BASE_URL}"
-
 # ---------------------------------------------------------------- state ----
 
 ORDERS = {}          # oid -> order dict
 USER_STATE = {}      # chat_id -> {"step":..., "product_id":..., "qty":...}
 PRODUCTS = {"items": [], "ts": 0}
+LANGS = {}           # chat_id(str) -> "ar" | "en" | "ru"
 
 # ------------------------------------------------- persistence -----------
-# Orders survive Railway restarts/redeploys via a JSON file on disk.
-ORDERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orders.json")
+# Orders + languages survive Railway restarts/redeploys via JSON files on disk.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+ORDERS_FILE = os.path.join(_HERE, "orders.json")
+LANGS_FILE = os.path.join(_HERE, "langs.json")
+
+def _save_json(path, data):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as e:
+        print("save error:", path, e)
+
+def _load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print("load error:", path, e)
+        return {}
 
 def save_orders():
-    try:
-        tmp = ORDERS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(ORDERS, f, ensure_ascii=False)
-        os.replace(tmp, ORDERS_FILE)
-    except Exception as e:
-        print("save_orders error:", e)
+    _save_json(ORDERS_FILE, ORDERS)
 
-def load_orders():
-    try:
-        with open(ORDERS_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            ORDERS.update(data)
-            print(f"loaded {len(ORDERS)} orders from disk")
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        print("load_orders error:", e)
+def save_langs():
+    _save_json(LANGS_FILE, LANGS)
 
-load_orders()
+ORDERS.update(_load_json(ORDERS_FILE))
+LANGS.update(_load_json(LANGS_FILE))
+print(f"loaded {len(ORDERS)} orders, {len(LANGS)} lang prefs from disk")
+
+# ------------------------------------------------------------------- i18n ---
+
+STRINGS = {
+    "menu_shop":        {"ar": "🛍️ المتجر", "en": "🛍️ Shop", "ru": "🛍️ Магазин"},
+    "menu_orders":      {"ar": "📦 طلباتي", "en": "📦 My orders", "ru": "📦 Мои заказы"},
+    "menu_reserv":      {"ar": "⏳ حجوزاتي", "en": "⏳ My bookings", "ru": "⏳ Мои брони"},
+    "menu_topup":       {"ar": "💳 شحن الرصيد", "en": "💳 Top up", "ru": "💳 Пополнить"},
+    "menu_referral":    {"ar": "🔗 رابط الإحالة", "en": "🔗 Referral link", "ru": "🔗 Реферальная ссылка"},
+    "menu_support":     {"ar": "🎧 الدعم", "en": "🎧 Support", "ru": "🎧 Поддержка"},
+    "menu_lang":        {"ar": "🌐 Language / اللغة", "en": "🌐 Language", "ru": "🌐 Язык"},
+    "menu_reseller":    {"ar": "🔑 بوابة الموزعين", "en": "🔑 Reseller portal", "ru": "🔑 Портал дилеров"},
+    "welcome":          {"ar": "🛍️ <b>مرحباً بك في المتجر!</b>\n\nأهلاً {name}! 👋\nاختار من القائمة 👇",
+                         "en": "🛍️ <b>Welcome to the store!</b>\n\nHello {name}! 👋\nChoose from the menu 👇",
+                         "ru": "🛍️ <b>Добро пожаловать в магазин!</b>\n\nПривет, {name}! 👋\nВыберите из меню 👇"},
+    "admin_hello":      {"ar": "👋 مرحباً أيها المدير!\nالبوت يعمل بالـ webhook ⚡"},
+    "brands_title":     {"ar": "🛍️ <b>اختار العلامة التجارية:</b>",
+                         "en": "🛍️ <b>Choose a brand:</b>",
+                         "ru": "🛍️ <b>Выберите бренд:</b>"},
+    "brands_count":     {"ar": "{np} منتج · {nb} علامة", "en": "{np} products · {nb} brands", "ru": "{np} товаров · {nb} брендов"},
+    "stock_legend":     {"ar": "🟢 متوفر    🔴 غير متوفر", "en": "🟢 Available    🔴 Out of stock", "ru": "🟢 В наличии    🔴 Нет в наличии"},
+    "choose_product":   {"ar": "اختار المنتج:", "en": "Choose a product:", "ru": "Выберите товар:"},
+    "no_products":      {"ar": "لا توجد منتجات في هذه العلامة.", "en": "No products in this brand.", "ru": "В этом бренде нет товаров."},
+    "back_brands":      {"ar": "⬅️ رجوع للعلامات", "en": "⬅️ Back to brands", "ru": "⬅️ Назад к брендам"},
+    "product_missing":  {"ar": "⚠️ المنتج غير موجود.", "en": "⚠️ Product not found.", "ru": "⚠️ Товар не найден."},
+    "price":            {"ar": "💰 الثمن:", "en": "💰 Price:", "ru": "💰 Цена:"},
+    "stock_is":         {"ar": "📊 المخزون:", "en": "📊 Stock:", "ru": "📊 Остаток:"},
+    "avail_n":          {"ar": "✅ متوفر ({n})", "en": "✅ Available ({n})", "ru": "✅ В наличии ({n})"},
+    "not_avail":        {"ar": "❌ غير متوفر", "en": "❌ Out of stock", "ru": "❌ Нет в наличии"},
+    "buy_now":          {"ar": "🛒 اشترِ الآن", "en": "🛒 Buy now", "ru": "🛒 Купить"},
+    "back":             {"ar": "⬅️ رجوع", "en": "⬅️ Back", "ru": "⬅️ Назад"},
+    "choose_qty":       {"ar": "🔢 <b>اختار العدد:</b>", "en": "🔢 <b>Choose quantity:</b>", "ru": "🔢 <b>Выберите количество:</b>"},
+    "per_unit":         {"ar": "/ للواحد", "en": "each", "ru": "за шт."},
+    "avail_label":      {"ar": "📊 متوفر:", "en": "📊 Available:", "ru": "📊 В наличии:"},
+    "custom_qty":       {"ar": "✏️ عدد مخصص", "en": "✏️ Custom quantity", "ru": "✏️ Своё количество"},
+    "write_qty":        {"ar": "✏️ <b>اكتب العدد المطلوب</b> (رقم فقط):",
+                         "en": "✏️ <b>Type the quantity</b> (numbers only):",
+                         "ru": "✏️ <b>Введите количество</b> (только цифры):"},
+    "qty_range":        {"ar": "⚠️ العدد يجب أن يكون بين 1 و 999.", "en": "⚠️ Quantity must be between 1 and 999.", "ru": "⚠️ Количество должно быть от 1 до 999."},
+    "stock_only":       {"ar": "⚠️ المخزون المتوفر: {n} فقط.", "en": "⚠️ Only {n} in stock.", "ru": "⚠️ В наличии только {n}."},
+    "choose_pay":       {"ar": "💳 <b>اختار طريقة الدفع:</b>", "en": "💳 <b>Choose payment method:</b>", "ru": "💳 <b>Выберите способ оплаты:</b>"},
+    "order_title":      {"ar": "🧾 <b>تأكيد الطلب</b>", "en": "🧾 <b>Order confirmation</b>", "ru": "🧾 <b>Подтверждение заказа</b>"},
+    "f_product":        {"ar": "📦 المنتج:", "en": "📦 Product:", "ru": "📦 Товар:"},
+    "f_qty":            {"ar": "🔢 العدد:", "en": "🔢 Quantity:", "ru": "🔢 Количество:"},
+    "f_total":          {"ar": "💰 المجموع:", "en": "💰 Total:", "ru": "💰 Итого:"},
+    "f_payvia":         {"ar": "💳 الدفع عبر:", "en": "💳 Pay via:", "ru": "💳 Оплата через:"},
+    "f_instr":          {"ar": "📋 <b>التعليمات:</b>", "en": "📋 <b>Instructions:</b>", "ru": "📋 <b>Инструкции:</b>"},
+    "step1":            {"ar": "1️⃣ حوّل المبلغ الدقيق", "en": "1️⃣ Send the exact amount", "ru": "1️⃣ Отправьте точную сумму"},
+    "step2":            {"ar": "2️⃣ اضغط زر <b>✅ تم الدفع</b>", "en": "2️⃣ Tap <b>✅ Paid</b>", "ru": "2️⃣ Нажмите <b>✅ Оплачено</b>"},
+    "step3":            {"ar": "3️⃣ أرسل <b>لقطة شاشة</b> أو <b>رقم العملية (TxID)</b>",
+                         "en": "3️⃣ Send a <b>screenshot</b> or <b>transaction ID (TxID)</b>",
+                         "ru": "3️⃣ Отправьте <b>скриншот</b> или <b>ID транзакции (TxID)</b>"},
+    "deliver_after":    {"ar": "سيتم إرسال المنتج إليك مباشرة بعد التأكيد.",
+                         "en": "The product will be delivered right after confirmation.",
+                         "ru": "Товар будет доставлен сразу после подтверждения."},
+    "paid_btn":         {"ar": "✅ تم الدفع", "en": "✅ Paid", "ru": "✅ Оплачено"},
+    "cancel_btn":       {"ar": "❌ إلغاء الطلب", "en": "❌ Cancel order", "ru": "❌ Отменить заказ"},
+    "cancelled":        {"ar": "تم إلغاء الطلب ❌", "en": "Order cancelled ❌", "ru": "Заказ отменён ❌"},
+    "order_gone":       {"ar": "الطلب غير موجود.", "en": "Order not found.", "ru": "Заказ не найден."},
+    "order_busy":       {"ar": "الطلب قيد المعالجة.", "en": "Order is being processed.", "ru": "Заказ обрабатывается."},
+    "send_proof":       {"ar": "📸 <b>أرسل دليل الدفع:</b>", "en": "📸 <b>Send payment proof:</b>", "ru": "📸 <b>Отправьте подтверждение оплаты:</b>"},
+    "proof_or":         {"ar": "• لقطة شاشة للتحويل، <b>أو</b>", "en": "• Transfer screenshot, <b>or</b>", "ru": "• Скриншот перевода <b>или</b>"},
+    "proof_txid":       {"ar": "• رقم العملية (TxID / 🆔)", "en": "• Transaction ID (TxID / 🆔)", "ru": "• ID транзакции (TxID / 🆔)"},
+    "proof_here":       {"ar": "اكتب الرقم أو أرسل الصورة هنا 👇", "en": "Type the ID or send the photo here 👇", "ru": "Введите ID или отправьте фото сюда 👇"},
+    "proof_ok":         {"ar": "✅ توصلنا بإثبات الدفع. سيتم مراجعة طلبك قريباً ⏳",
+                         "en": "✅ Payment proof received. Your order will be reviewed soon ⏳",
+                         "ru": "✅ Подтверждение получено. Ваш заказ скоро будет проверен ⏳"},
+    "txid_ok":          {"ar": "✅ توصلنا برقم العملية. سيتم مراجعة طلبك قريباً ⏳",
+                         "en": "✅ Transaction ID received. Your order will be reviewed soon ⏳",
+                         "ru": "✅ ID транзакции получен. Ваш заказ скоро будет проверен ⏳"},
+    "no_pending":       {"ar": "ليس لديك طلب بانتظار الدفع. ابدأ من 🛍️ المتجر.",
+                         "en": "You have no pending payment order. Start from 🛍️ Shop.",
+                         "ru": "У вас нет ожидающих оплату заказов. Начните с 🛍️ Магазина."},
+    "orders_title":     {"ar": "🧾 <b>طلباتي:</b>", "en": "🧾 <b>My orders:</b>", "ru": "🧾 <b>Мои заказы:</b>"},
+    "no_orders":        {"ar": "🧾 لا توجد طلبات بعد.", "en": "🧾 No orders yet.", "ru": "🧾 Заказов пока нет."},
+    "st_pay":           {"ar": "⏳ بانتظار الدفع", "en": "⏳ Awaiting payment", "ru": "⏳ Ожидает оплаты"},
+    "st_review":        {"ar": "🔍 قيد المراجعة", "en": "🔍 Under review", "ru": "🔍 На проверке"},
+    "st_done":          {"ar": "✅ تم التسليم", "en": "✅ Delivered", "ru": "✅ Доставлен"},
+    "st_rejected":      {"ar": "❌ مرفوض", "en": "❌ Rejected", "ru": "❌ Отклонён"},
+    "st_cancelled":     {"ar": "🚫 ملغي", "en": "🚫 Cancelled", "ru": "🚫 Отменён"},
+    "reserv_title":     {"ar": "⏳ <b>حجوزاتي</b>\n\nليس لديك أي حجوزات نشطة حالياً.",
+                         "en": "⏳ <b>My bookings</b>\n\nYou have no active bookings.",
+                         "ru": "⏳ <b>Мои брони</b>\n\nУ вас нет активных броней."},
+    "topup_title":      {"ar": "💳 <b>شحن الرصيد</b>\n\nاختر طريقة الدفع وتواصل مع الإدارة:",
+                         "en": "💳 <b>Top up balance</b>\n\nChoose a payment method and contact support:",
+                         "ru": "💳 <b>Пополнить баланс</b>\n\nВыберите способ оплаты и свяжитесь с поддержкой:"},
+    "contact_support":  {"ar": "💬 تواصل مع الدعم", "en": "💬 Contact support", "ru": "💬 Связаться с поддержкой"},
+    "back_menu":        {"ar": "⬅️ رجوع للقائمة", "en": "⬅️ Back to menu", "ru": "⬅️ Назад в меню"},
+    "referral_title":   {"ar": "🔗 <b>رابط الإحالة الخاص بك:</b>", "en": "🔗 <b>Your referral link:</b>", "ru": "🔗 <b>Ваша реферальная ссылка:</b>"},
+    "referral_share":   {"ar": "شاركه مع أصدقائك واربح عمولة على كل عملية شراء! 🎁",
+                         "en": "Share it with friends and earn commission on every purchase! 🎁",
+                         "ru": "Делитесь с друзьями и получайте комиссию с каждой покупки! 🎁"},
+    "support_title":    {"ar": "🎧 <b>الدعم</b>\n\nللتواصل المباشر مع الإدارة:",
+                         "en": "🎧 <b>Support</b>\n\nTo contact us directly:",
+                         "ru": "🎧 <b>Поддержка</b>\n\nДля прямой связи:"},
+    "choose_lang":      {"ar": "🌐 <b>الرجاء اختيار اللغة:</b>", "en": "🌐 <b>Please choose a language:</b>", "ru": "🌐 <b>Пожалуйста, выберите язык:</b>"},
+    "lang_set":         {"ar": "✅ تم اختيار اللغة: العربية", "en": "✅ Language selected: English", "ru": "✅ Язык выбран: Русский"},
+    "reseller_title":   {"ar": "🔑 <b>بوابة الموزعين</b>\n\nهذه المنطقة مخصصة للموزعين المعتمدين.",
+                         "en": "🔑 <b>Reseller portal</b>\n\nThis area is for approved resellers.",
+                         "ru": "🔑 <b>Портал дилеров</b>\n\nЭта зона для проверенных дилеров."},
+    "reseller_contact": {"ar": "للاستفسار تواصل مع:", "en": "For inquiries contact:", "ru": "По вопросам обращайтесь:"},
+    "refresh":          {"ar": "🔄 تحديث", "en": "🔄 Refresh", "ru": "🔄 Обновить"},
+    "need_screenshot":  {"ar": "📸 أرسل لقطة شاشة للتحويل لإتمام طلبك.",
+                         "en": "📸 Send a transfer screenshot to complete your order.",
+                         "ru": "📸 Отправьте скриншот перевода для завершения заказа."},
+    "hello_choose":     {"ar": "🛍️ مرحباً بك!\nاختر من القائمة بالأسفل 👇",
+                         "en": "🛍️ Welcome!\nChoose from the menu below 👇",
+                         "ru": "🛍️ Добро пожаловать!\nВыберите из меню ниже 👇"},
+    "ans_proof":        {"ar": "أرسل الدليل", "en": "Send proof", "ru": "Отправьте подтверждение"},
+    "ans_number":       {"ar": "اكتب العدد", "en": "Type the number", "ru": "Введите число"},
+    "ans_done":         {"ar": "تم ✅", "en": "Done ✅", "ru": "Готово ✅"},
+    "help_title":       {"ar": "❓ <b>مساعدة</b>", "en": "❓ <b>Help</b>", "ru": "❓ <b>Помощь</b>"},
+    "help_shop":        {"ar": "🛍️ المتجر — تصفح المنتجات والشراء", "en": "🛍️ Shop — browse and buy products", "ru": "🛍️ Магазин — каталог и покупки"},
+    "help_orders":      {"ar": "🧾 طلباتي — تتبع طلباتك", "en": "🧾 My orders — track your orders", "ru": "🧾 Мои заказы — отслеживание заказов"},
+    "help_topup":       {"ar": "💳 شحن الرصيد — طرق الدفع", "en": "💳 Top up — payment methods", "ru": "💳 Пополнение — способы оплаты"},
+    "help_contact":     {"ar": "للتواصل المباشر:", "en": "To contact us directly:", "ru": "Для прямой связи:"},
+    "support_word":     {"ar": "💬 الدعم", "en": "💬 Support", "ru": "💬 Поддержка"},
+    "rejected_msg":     {"ar": "❌ تم رفض طلبك. تواصل مع الدعم للمزيد من المعلومات.",
+                         "en": "❌ Your order was rejected. Contact support for more info.",
+                         "ru": "❌ Ваш заказ отклонён. Свяжитесь с поддержкой."},
+    "buy_failed":       {"ar": "⚠️ حدث خطأ أثناء تجهيز طلبك. سيتواصل معك المدير قريباً.",
+                         "en": "⚠️ An error occurred while processing your order. The manager will contact you soon.",
+                         "ru": "⚠️ Произошла ошибка при обработке заказа. Менеджер скоро свяжется с вами."},
+    "delivered_msg":    {"ar": "🎉 <b>تم تأكيد طلبك!</b>\n\n📦 {product} × {qty}\n\n🔑 بيانات المنتج:\n{body}\n\nشكراً لثقتك! 🙏",
+                         "en": "🎉 <b>Your order is confirmed!</b>\n\n📦 {product} × {qty}\n\n🔑 Product details:\n{body}\n\nThank you for your trust! 🙏",
+                         "ru": "🎉 <b>Ваш заказ подтверждён!</b>\n\n📦 {product} × {qty}\n\n🔑 Данные товара:\n{body}\n\nСпасибо за доверие! 🙏"},
+    "delivered_short":  {"ar": "🎉 تم تأكيد طلبك! سيتواصل معك المدير.",
+                         "en": "🎉 Your order is confirmed! The manager will contact you.",
+                         "ru": "🎉 Ваш заказ подтверждён! Менеджер свяжется с вами."},
+}
+
+def get_lang(chat_id):
+    return LANGS.get(str(chat_id), "ar")
+
+def t(key, chat_id=None):
+    lang = get_lang(chat_id) if chat_id is not None else "ar"
+    entry = STRINGS.get(key, {})
+    return entry.get(lang) or entry.get("ar") or key
+
+def set_lang(chat_id, lang):
+    LANGS[str(chat_id)] = lang
+    save_langs()
+
+def status_label(status, chat_id):
+    return {"awaiting_payment": t("st_pay", chat_id),
+            "awaiting_proof": t("st_pay", chat_id),
+            "awaiting_approval": t("st_review", chat_id),
+            "delivered": t("st_done", chat_id),
+            "rejected": t("st_rejected", chat_id),
+            "cancelled": t("st_cancelled", chat_id)}.get(status, status)
 
 # ---------------------------------------------------------------- helpers --
 
@@ -114,149 +278,110 @@ def tg(method, params=None):
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read())
 
-def shop(path, method="GET", body=None):
-    req = urllib.request.Request(f"{SHOP}{path}", method=method,
-                                 headers={"X-API-Key": SHOP_API_KEY})
-    data = json.dumps(body).encode() if body is not None else None
-    if data:
-        req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=30, data=data) as r:
-        return json.loads(r.read())
-
 def esc(s):
-    return html.escape(str(s), quote=False)
+    return html.escape(str(s or ""), quote=False)
 
 def send(chat_id, text, reply_markup=None, parse_mode="HTML"):
-    params = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+    p = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode,
+         "disable_web_page_preview": True}
     if reply_markup:
-        params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    try:
-        return tg("sendMessage", params)
-    except Exception as e:
-        print("SEND FAILED:", e)
+        p["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+    return tg("sendMessage", p)
 
 def send_photo(chat_id, photo_bytes, caption, reply_markup=None):
-    import uuid
-    boundary = uuid.uuid4().hex
-    body = b""
-    def field(name, value):
-        nonlocal body
-        body += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
-        body += str(value).encode() + b"\r\n"
-    field("chat_id", chat_id); field("caption", caption); field("parse_mode", "HTML")
+    import io
+    boundary = "----botboundary1234"
+    body = io.BytesIO()
+    def field(n, v):
+        body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{n}\"\r\n\r\n{v}\r\n".encode())
+    field("chat_id", str(chat_id)); field("caption", caption); field("parse_mode", "HTML")
     if reply_markup:
         field("reply_markup", json.dumps(reply_markup, ensure_ascii=False))
-    body += (f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; '
-             f'filename="p.jpg"\r\nContent-Type: image/jpeg\r\n\r\n').encode()
-    body += photo_bytes + b"\r\n" + f"--{boundary}--\r\n".encode()
-    req = urllib.request.Request(f"{TG}/sendPhoto", data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"p.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".encode())
+    body.write(photo_bytes); body.write(f"\r\n--{boundary}--\r\n".encode())
+    req = urllib.request.Request(f"{TG}/sendPhoto", data=body.getvalue())
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read())
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read()).get("ok")
     except Exception as e:
-        print("PHOTO FAILED:", e); return None
+        print("sendPhoto failed:", e); return False
+
+def shop(path, method="GET", data=None):
+    url = SHOP + path
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("X-API-Key", SHOP_API_KEY)
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
 
 # ---------------------------------------------------------------- products -
 
 def refresh_products(force=False):
-    if not force and time.time() - PRODUCTS["ts"] < 300:
+    if not force and time.time() - PRODUCTS["ts"] < 120 and PRODUCTS["items"]:
         return PRODUCTS["items"]
     try:
         res = shop("/api/products")
-        items = res.get("products", res if isinstance(res, list) else [])
-        PRODUCTS["items"] = items; PRODUCTS["ts"] = time.time()
+        items = res.get("products", res.get("items", [])) if isinstance(res, dict) else res
+        PRODUCTS["items"] = items or []
+        PRODUCTS["ts"] = time.time()
     except Exception as e:
-        print("product refresh failed:", e)
+        print("products fetch failed:", e)
     return PRODUCTS["items"]
 
-def stock_of(p):
-    for k in ("stock_count", "stockCount", "stock", "quantity"):
-        v = p.get(k)
-        if v is not None:
-            try: return int(v)
-            except: pass
-    return 0
-
-def cust_price(p):
-    try: return round(float(p.get("price") or 0) * MARGIN, 2)
-    except: return 0.0
-
 def prod_name(p):
-    return p.get("name_en") or p.get("name") or f"#{p.get('id')}"
+    return p.get("name") or p.get("title") or f"#{p.get('id')}"
 
 def brand_of(p):
-    """Extract brand from product name (first meaningful word)."""
-    name = prod_name(p).lower()
-    # known brands
-    brands = ["chatgpt", "gemini", "capcut", "canva", "notion", "figma",
-              "duolingo", "youtube", "netflix", "spotify", "adobe", "miro",
-              "fortnite", "tiktok", "instagram", "telegram", "microsoft",
-              "lovable", "cursor", "jetbrains", "edx", "udemy", "coursera",
-              "midjourney", "claude", "deepseek", "grok", "perplexity",
-              "autodesk", "ilovepdf", "nordvpn", "expressvpn", "disney",
-              "prime", "shahid", "osn", "anghami", "deezer", "xbox",
-              "playstation", "steam", "api"]
-    for b in brands:
-        if b in name:
-            return b.capitalize()
-    # fallback: first word
-    w = re.split(r'[\s\-_]+', prod_name(p).strip())
-    return w[0][:12].capitalize() if w else "?"
+    b = (p.get("brand") or p.get("category") or "عام").strip()
+    return b or "عام"
 
-def brand_emoji(brand):
-    b = brand.lower()
-    m = {"chatgpt": "🤖", "gemini": "✨", "capcut": "🎬", "canva": "🎨",
-         "notion": "📝", "figma": "🎯", "duolingo": "🦉", "youtube": "📺",
-         "netflix": "🎬", "spotify": "🎵", "adobe": "🎨", "miro": "📌",
-         "fortnite": "🎮", "tiktok": "🎵", "instagram": "📸",
-         "microsoft": "💼", "lovable": "💜", "jetbrains": "💻",
-         "autodesk": "🏗️", "api": "🔑"}
-    return m.get(b, "📦")
+def stock_of(p):
+    for k in ("stock", "quantity", "available", "count"):
+        v = p.get(k)
+        if isinstance(v, (int, float)) and v >= 0:
+            return int(v)
+    return 999
 
-IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "img")
-IMG_MAP = [
-    ("gemini", "ai.jpg"), ("chatgpt", "ai.jpg"), ("claude", "ai.jpg"),
-    ("midjourney", "ai.jpg"), ("lovable", "ai.jpg"), ("deepseek", "ai.jpg"),
-    ("fortnite", "game.jpg"), ("xbox", "game.jpg"), ("playstation", "game.jpg"),
-    ("steam", "game.jpg"), ("youtube", "video.jpg"), ("netflix", "video.jpg"),
-    ("disney", "video.jpg"), ("prime", "video.jpg"),
-    ("spotify", "music.jpg"), ("anghami", "music.jpg"),
-    ("canva", "design.jpg"), ("miro", "design.jpg"), ("figma", "design.jpg"),
-    ("notion", "productivity.jpg"), ("microsoft", "productivity.jpg"),
-    ("instagram", "social.jpg"), ("tiktok", "social.jpg"),
-    ("capcut", "editing.jpg"), ("duolingo", "education.jpg"),
-    ("coursera", "education.jpg"), ("udemy", "education.jpg"),
-    ("bot", "bot.jpg"), ("api", "bot.jpg"),
-]
+def cust_price(p):
+    try:
+        return round(float(p.get("price", 0)) * MARGIN, 2)
+    except Exception:
+        return 0.0
+
+_BRAND_EMOJI = ["🏷️", "🛒", "🎮", "🎨", "📱", "💻", "🎬", "📚", "🎵", "👕"]
+def brand_emoji(b):
+    return _BRAND_EMOJI[abs(hash(b)) % len(_BRAND_EMOJI)]
+
 def product_image(name):
-    n = (name or "").lower()
-    for kw, fn in IMG_MAP:
-        if kw in n:
-            p = os.path.join(IMG_DIR, fn)
-            if os.path.exists(p): return p
-    p = os.path.join(IMG_DIR, "generic.jpg")
-    return p if os.path.exists(p) else None
+    safe = re.sub(r"[^\w\-]+", "_", name, flags=re.U).strip("_")[:60]
+    for ext in (".jpg", ".png", ".jpeg", ".webp"):
+        for base in ("img", "images"):
+            p = os.path.join(_HERE, base, safe + ext)
+            if os.path.exists(p):
+                return p
+    return None
 
 # ---------------------------------------------------------------- keyboards
 
-def main_keyboard():
-    """Main menu as 2-column inline grid matching the reference design."""
+def main_keyboard(chat_id):
     return {"inline_keyboard": [
-        [{"text": "🛍️ المتجر", "callback_data": "menu:shop"},
-         {"text": "📦 طلباتي", "callback_data": "menu:orders"}],
-        [{"text": "⏳ حجوزاتي", "callback_data": "menu:reservations"},
-         {"text": "💳 شحن الرصيد", "callback_data": "menu:topup"}],
-        [{"text": "🔗 رابط الإحالة", "callback_data": "menu:referral"},
-         {"text": "🎧 الدعم", "callback_data": "menu:support"}],
-        [{"text": "🌐 Language / اللغة", "callback_data": "menu:language"},
-         {"text": "🔑 بوابة الموزعين", "callback_data": "menu:reseller"}],
+        [{"text": t("menu_shop", chat_id), "callback_data": "menu:shop"},
+         {"text": t("menu_orders", chat_id), "callback_data": "menu:orders"}],
+        [{"text": t("menu_reserv", chat_id), "callback_data": "menu:reservations"},
+         {"text": t("menu_topup", chat_id), "callback_data": "menu:topup"}],
+        [{"text": t("menu_referral", chat_id), "callback_data": "menu:referral"},
+         {"text": t("menu_support", chat_id), "callback_data": "menu:support"}],
+        [{"text": t("menu_lang", chat_id), "callback_data": "menu:language"},
+         {"text": t("menu_reseller", chat_id), "callback_data": "menu:reseller"}],
     ]}
 
+def back_to_menu_kb(chat_id):
+    return {"inline_keyboard": [[{"text": t("back_menu", chat_id), "callback_data": "menu:main"}]]}
+
 def show_main_menu(chat_id, name=""):
-    send(chat_id,
-         f"🛍️ <b>مرحباً بك في المتجر!</b>\n\nأهلاً {esc(name)}! 👋\nاختار من القائمة 👇",
-         main_keyboard())
+    send(chat_id, t("welcome", chat_id).format(name=esc(name)), main_keyboard(chat_id))
 
 def brand_keyboard():
     """3-column brand grid with stock indicators."""
@@ -272,26 +397,25 @@ def brand_keyboard():
     kb, row = [], []
     for b in sorted(brands):
         info = brands[b]
-        mark = "🟢" if info["available"] > 0 else "🔴"
         row.append({"text": f"{brand_emoji(b)} {b} · {info['total']}",
                     "callback_data": f"brand:{b}"})
         if len(row) == 3:
             kb.append(row); row = []
     if row: kb.append(row)
-    kb.append([{"text": "🔄 تحديث", "callback_data": "brands_refresh"}])
     return kb, len(products), len(brands)
 
 def show_brands(chat_id):
     kb, n_prod, n_brand = brand_keyboard()
+    kb.append([{"text": t("refresh", chat_id), "callback_data": "brands_refresh"}])
     send(chat_id,
-         f"🛍️ <b>اختار العلامة التجارية:</b>\n{n_prod} منتج · {n_brand} علامة\n\n"
-         f"🟢 متوفر &nbsp;&nbsp; 🔴 غير متوفر",
+         f"{t('brands_title', chat_id)}\n{t('brands_count', chat_id).format(np=n_prod, nb=n_brand)}\n\n"
+         f"{t('stock_legend', chat_id)}",
          {"inline_keyboard": kb})
 
 def show_brand_products(chat_id, brand):
     products = [p for p in refresh_products() if brand_of(p) == brand]
     if not products:
-        send(chat_id, "لا توجد منتجات في هذه العلامة.")
+        send(chat_id, t("no_products", chat_id))
         return
     kb = []
     for p in products:
@@ -300,25 +424,25 @@ def show_brand_products(chat_id, brand):
         mark = "✅" if st > 0 else "❌"
         label = f"{mark} {prod_name(p)[:30]} — ${cust_price(p)}"
         kb.append([{"text": label, "callback_data": f"product:{pid}"}])
-    kb.append([{"text": "⬅️ رجوع للعلامات", "callback_data": "back_brands"}])
+    kb.append([{"text": t("back_brands", chat_id), "callback_data": "back_brands"}])
     send(chat_id,
-         f"{brand_emoji(brand)} <b>{esc(brand)}</b> — اختار المنتج:",
+         f"{brand_emoji(brand)} <b>{esc(brand)}</b> — {t('choose_product', chat_id)}",
          {"inline_keyboard": kb})
 
 def show_product_detail(chat_id, pid):
     p = next((x for x in refresh_products() if str(x.get("id")) == str(pid)), None)
     if not p:
-        send(chat_id, "⚠️ المنتج غير موجود."); return
+        send(chat_id, t("product_missing", chat_id)); return
     name, st, pr = prod_name(p), stock_of(p), cust_price(p)
-    stock_txt = f"✅ متوفر ({st})" if st > 0 else "❌ غير متوفر"
+    stock_txt = t("avail_n", chat_id).format(n=st) if st > 0 else t("not_avail", chat_id)
     caption = (f"📦 <b>{esc(name)}</b>\n\n"
-               f"💰 الثمن: <b>${pr}</b>\n"
-               f"📊 المخزون: {stock_txt}\n")
+               f"{t('price', chat_id)} <b>${pr}</b>\n"
+               f"{t('stock_is', chat_id)} {stock_txt}\n")
     kb = {"inline_keyboard": [
-        [{"text": "🛒 اشترِ الآن", "callback_data": f"buy:{pid}"}],
-        [{"text": "⬅️ رجوع", "callback_data": f"brand:{brand_of(p)}"}],
+        [{"text": t("buy_now", chat_id), "callback_data": f"buy:{pid}"}],
+        [{"text": t("back", chat_id), "callback_data": f"brand:{brand_of(p)}"}],
     ]} if st > 0 else {"inline_keyboard": [
-        [{"text": "⬅️ رجوع", "callback_data": f"brand:{brand_of(p)}"}]]}
+        [{"text": t("back", chat_id), "callback_data": f"brand:{brand_of(p)}"}]]}
     img = product_image(name)
     if img:
         try:
@@ -339,12 +463,12 @@ def show_quantity(chat_id, pid):
             row.append({"text": f"{q}", "callback_data": f"qty:{pid}:{q}"})
             if len(row) == 3: kb.append(row); row = []
     if row: kb.append(row)
-    kb.append([{"text": "✏️ عدد مخصص", "callback_data": f"qtycustom:{pid}"}])
-    kb.append([{"text": "⬅️ رجوع", "callback_data": f"product:{pid}"}])
+    kb.append([{"text": t("custom_qty", chat_id), "callback_data": f"qtycustom:{pid}"}])
+    kb.append([{"text": t("back", chat_id), "callback_data": f"product:{pid}"}])
     USER_STATE[str(chat_id)] = {"step": "qty", "product_id": pid}
     send(chat_id,
-         f"🔢 <b>اختار العدد:</b>\n\n{esc(prod_name(p))}\n"
-         f"💰 ${cust_price(p)} / للواحد\n📊 متوفر: {st}",
+         f"{t('choose_qty', chat_id)}\n\n{esc(prod_name(p))}\n"
+         f"💰 ${cust_price(p)} {t('per_unit', chat_id)}\n{t('avail_label', chat_id)} {st}",
          {"inline_keyboard": kb})
 
 def show_payment_methods(chat_id, pid, qty):
@@ -356,11 +480,11 @@ def show_payment_methods(chat_id, pid, qty):
     for m in PAYMENT_METHODS:
         kb.append([{"text": f"{m.get('emoji','💳')} {m['name']}",
                     "callback_data": f"pay:{pid}:{qty}:{m['key']}"}])
-    kb.append([{"text": "⬅️ رجوع", "callback_data": f"buy:{pid}"}])
+    kb.append([{"text": t("back", chat_id), "callback_data": f"buy:{pid}"}])
     send(chat_id,
-         f"💳 <b>اختار طريقة الدفع:</b>\n\n"
+         f"{t('choose_pay', chat_id)}\n\n"
          f"📦 {esc(prod_name(p))} × {qty}\n"
-         f"💰 المجموع: <b>${total}</b>",
+         f"{t('f_total', chat_id)} <b>${total}</b>",
          {"inline_keyboard": kb})
 
 def create_order(chat_id, user_name, pid, qty, pay_key):
@@ -380,26 +504,26 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
     save_orders()
     USER_STATE.pop(str(chat_id), None)
     kb = {"inline_keyboard": [
-        [{"text": "✅ تم الدفع", "callback_data": f"paid:{oid}"}],
-        [{"text": "❌ إلغاء الطلب", "callback_data": f"cancel:{oid}"}]]}
+        [{"text": t("paid_btn", chat_id), "callback_data": f"paid:{oid}"}],
+        [{"text": t("cancel_btn", chat_id), "callback_data": f"cancel:{oid}"}]]}
     send(chat_id,
-         f"🧾 <b>تأكيد الطلب</b>\n\n"
-         f"📦 المنتج: <b>{esc(prod_name(p))}</b>\n"
-         f"🔢 العدد: <b>{qty}</b>\n"
-         f"💰 المجموع: <b>${total}</b>\n"
-         f"💳 الدفع عبر: <b>{esc(m['name'])}</b>\n\n"
-         f"📋 <b>التعليمات:</b>\n{esc(m.get('instructions',''))}\n\n"
-         f"1️⃣ حوّل المبلغ الدقيق\n"
-         f"2️⃣ اضغط زر <b>✅ تم الدفع</b>\n"
-         f"3️⃣ أرسل <b>لقطة شاشة</b> أو <b>رقم العملية (TxID)</b>\n\n"
-         f"سيتم إرسال المنتج إليك مباشرة بعد التأكيد.",
+         f"{t('order_title', chat_id)}\n\n"
+         f"{t('f_product', chat_id)} <b>{esc(prod_name(p))}</b>\n"
+         f"{t('f_qty', chat_id)} <b>{qty}</b>\n"
+         f"{t('f_total', chat_id)} <b>${total}</b>\n"
+         f"{t('f_payvia', chat_id)} <b>{esc(m['name'])}</b>\n\n"
+         f"{t('f_instr', chat_id)}\n{esc(m.get('instructions',''))}\n\n"
+         f"{t('step1', chat_id)}\n"
+         f"{t('step2', chat_id)}\n"
+         f"{t('step3', chat_id)}\n\n"
+         f"{t('deliver_after', chat_id)}",
          kb)
 
 # ---------------------------------------------------------------- handlers -
 
 def handle_start(chat_id, name):
     if ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID):
-        send(chat_id, "👋 مرحباً أيها المدير!\nالبوت يعمل بالـ webhook ⚡", main_keyboard())
+        send(chat_id, t("admin_hello", chat_id), main_keyboard(chat_id))
         return
     show_main_menu(chat_id, name)
 
@@ -409,57 +533,49 @@ def handle_menu(chat_id, section, user_name):
     elif section == "orders":
         mine = [o for o in ORDERS.values() if str(o["user_chat_id"]) == str(chat_id)]
         if not mine:
-            send(chat_id, "🧾 لا توجد طلبات بعد.", back_to_menu_kb())
+            send(chat_id, t("no_orders", chat_id), back_to_menu_kb(chat_id))
         else:
             lines = []
             for o in sorted(mine, key=lambda x: -x["created_at"])[:10]:
-                st_map = {"awaiting_payment": "⏳ بانتظار الدفع",
-                          "awaiting_approval": "🔍 قيد المراجعة",
-                          "delivered": "✅ تم التسليم",
-                          "rejected": "❌ مرفوض", "cancelled": "🚫 ملغي"}
                 lines.append(f"📦 {esc(o['product_name'])} × {o['qty']} — "
-                             f"${o['total']} ({st_map.get(o['status'], o['status'])})")
-            send(chat_id, "🧾 <b>طلباتي:</b>\n\n" + "\n\n".join(lines), back_to_menu_kb())
+                             f"${o['total']} ({status_label(o['status'], chat_id)})")
+            send(chat_id, t("orders_title", chat_id) + "\n\n" + "\n\n".join(lines),
+                 back_to_menu_kb(chat_id))
     elif section == "reservations":
-        send(chat_id, "⏳ <b>حجوزاتي</b>\n\nليس لديك أي حجوزات نشطة حالياً.", back_to_menu_kb())
+        send(chat_id, t("reserv_title", chat_id), back_to_menu_kb(chat_id))
     elif section == "topup":
         send(chat_id,
-             "💳 <b>شحن الرصيد</b>\n\nاختر طريقة الدفع وتواصل مع الإدارة:\n"
-             f"👤 @{SUPPORT_USER}",
+             f"{t('topup_title', chat_id)}\n👤 @{SUPPORT_USER}",
              {"inline_keyboard": [
-                 [{"text": "💬 تواصل مع الدعم", "url": f"https://t.me/{SUPPORT_USER}"}],
-                 [{"text": "⬅️ رجوع للقائمة", "callback_data": "menu:main"}]]})
+                 [{"text": t("contact_support", chat_id), "url": f"https://t.me/{SUPPORT_USER}"}],
+                 [{"text": t("back_menu", chat_id), "callback_data": "menu:main"}]]})
     elif section == "referral":
         send(chat_id,
-             f"🔗 <b>رابط الإحالة الخاص بك:</b>\n\n"
+             f"{t('referral_title', chat_id)}\n\n"
              f"<code>https://t.me/{esc(BOT_USERNAME)}?start=ref_{chat_id}</code>\n\n"
-             f"شاركه مع أصدقائك واربح عمولة على كل عملية شراء! 🎁",
-             back_to_menu_kb())
+             f"{t('referral_share', chat_id)}",
+             back_to_menu_kb(chat_id))
     elif section == "support":
         send(chat_id,
-             f"🎧 <b>الدعم</b>\n\nللتواصل المباشر مع الإدارة:",
+             f"{t('support_title', chat_id)}",
              {"inline_keyboard": [
-                 [{"text": "💬 تواصل مع الدعم", "url": f"https://t.me/{SUPPORT_USER}"}],
-                 [{"text": "⬅️ رجوع للقائمة", "callback_data": "menu:main"}]]})
+                 [{"text": t("contact_support", chat_id), "url": f"https://t.me/{SUPPORT_USER}"}],
+                 [{"text": t("back_menu", chat_id), "callback_data": "menu:main"}]]})
     elif section == "language":
-        send(chat_id, "🌐 <b>الرجاء اختيار اللغة:</b>",
+        send(chat_id, t("choose_lang", chat_id),
              {"inline_keyboard": [
                  [{"text": "🇺🇸 English", "callback_data": "lang:en"},
                   {"text": "🇸🇦 العربية", "callback_data": "lang:ar"}],
                  [{"text": "🇷🇺 Русский", "callback_data": "lang:ru"},
                   {"text": "🇫🇷 Français", "callback_data": "lang:fr"}],
                  [{"text": "🇨🇳 中文", "callback_data": "lang:zh"},
-                  {"text": "⬅️ رجوع للقائمة", "callback_data": "menu:main"}]]})
+                  {"text": t("back_menu", chat_id), "callback_data": "menu:main"}]]})
     elif section == "reseller":
         send(chat_id,
-             "🔑 <b>بوابة الموزعين</b>\n\nهذه المنطقة مخصصة للموزعين المعتمدين.\n"
-             f"للاستفسار تواصل مع: @{SUPPORT_USER}",
-             back_to_menu_kb())
+             f"{t('reseller_title', chat_id)}\n{t('reseller_contact', chat_id)} @{SUPPORT_USER}",
+             back_to_menu_kb(chat_id))
     elif section == "main":
         show_main_menu(chat_id, user_name)
-
-def back_to_menu_kb():
-    return {"inline_keyboard": [[{"text": "⬅️ رجوع للقائمة", "callback_data": "menu:main"}]]}
 
 def notify_admin_proof(o, oid, user_name, chat_id, proof_block):
     if not ADMIN_CHAT_ID:
@@ -480,14 +596,14 @@ def handle_photo(chat_id, message_id, user_name):
             if str(o["user_chat_id"]) == str(chat_id)
             and o["status"] in ("awaiting_payment", "awaiting_proof")]
     if not pend:
-        send(chat_id, "ليس لديك طلب بانتظار الدفع. ابدأ من 🛍️ المتجر.", main_keyboard())
+        send(chat_id, t("no_pending", chat_id), main_keyboard(chat_id))
         return
     oid, o = pend[-1]
     o["status"] = "awaiting_approval"
     o["proof_type"] = "photo"
     save_orders()
     USER_STATE.pop(str(chat_id), None)
-    send(chat_id, "✅ توصلنا بإثبات الدفع. سيتم مراجعة طلبك قريباً ⏳")
+    send(chat_id, t("proof_ok", chat_id))
     notify_admin_proof(o, oid, user_name, chat_id, "📸 إثبات الدفع (صورة) 👇")
     tg("forwardMessage", {"chat_id": ADMIN_CHAT_ID, "from_chat_id": chat_id,
                           "message_id": message_id})
@@ -501,7 +617,7 @@ def admin_decision(chat_id, oid, approve):
     if not approve:
         o["status"] = "rejected"
         save_orders()
-        send(o["user_chat_id"], "❌ تم رفض طلبك. تواصل مع الدعم للمزيد من المعلومات.")
+        send(o["user_chat_id"], t("rejected_msg", o["user_chat_id"]))
         return "تم رفض الطلب."
     # auto-buy from supplier
     try:
@@ -509,7 +625,7 @@ def admin_decision(chat_id, oid, approve):
     except Exception as e:
         res = {"ok": False, "error": str(e)}
     if not res.get("ok"):
-        send(o["user_chat_id"], "⚠️ حدث خطأ أثناء تجهيز طلبك. سيتواصل معك المدير قريباً.")
+        send(o["user_chat_id"], t("buy_failed", o["user_chat_id"]))
         return f"⚠️ فشل الشراء من المزود: {esc(res.get('error',''))}"
     o["status"] = "delivered"
     save_orders()
@@ -517,11 +633,10 @@ def admin_decision(chat_id, oid, approve):
     if items:
         body = "\n\n".join(f"<code>{esc(i)}</code>" for i in items)
         send(o["user_chat_id"],
-             f"🎉 <b>تم تأكيد طلبك!</b>\n\n"
-             f"📦 {esc(o['product_name'])} × {o['qty']}\n\n"
-             f"🔑 بيانات المنتج:\n{body}\n\nشكراً لثقتك! 🙏")
+             t("delivered_msg", o["user_chat_id"]).format(
+                 product=esc(o['product_name']), qty=o['qty'], body=body))
     else:
-        send(o["user_chat_id"], f"🎉 تم تأكيد طلبك! سيتواصل معك المدير.")
+        send(o["user_chat_id"], t("delivered_short", o["user_chat_id"]))
     return "✅ تم التأكيد والتسليم."
 
 def handle_update(u):
@@ -530,16 +645,16 @@ def handle_update(u):
         chat_id = cb["message"]["chat"]["id"]
         data = cb.get("data", "")
         name = cb.get("from", {}).get("first_name", "")
-        answer = "تم ✅"
+        answer = t("ans_done", chat_id)
         try:
             if data.startswith("menu:"):
                 handle_menu(chat_id, data[5:], name)
             elif data.startswith("lang:"):
-                lang_names = {"en": "English", "ar": "العربية", "ru": "Русский",
-                              "fr": "Français", "zh": "中文"}
-                send(chat_id, f"✅ تم اختيار اللغة: {lang_names.get(data[5:], data[5:])}",
-                     back_to_menu_kb())
-                answer = "تم ✅"
+                lang = data[5:]
+                if lang in ("ar", "en", "ru"):
+                    set_lang(chat_id, lang)
+                send(chat_id, t("lang_set", chat_id), back_to_menu_kb(chat_id))
+                answer = t("ans_done", chat_id)
             elif data == "brands_refresh" or data == "back_brands":
                 show_brands(chat_id)
             elif data.startswith("brand:"):
@@ -554,8 +669,8 @@ def handle_update(u):
             elif data.startswith("qtycustom:"):
                 pid = data[10:]
                 USER_STATE[str(chat_id)] = {"step": "qty_custom", "product_id": pid}
-                send(chat_id, "✏️ <b>اكتب العدد المطلوب</b> (رقم فقط):")
-                answer = "اكتب العدد"
+                send(chat_id, t("write_qty", chat_id))
+                answer = t("ans_number", chat_id)
             elif data.startswith("pay:"):
                 _, pid, q, key = data.split(":")
                 create_order(chat_id, name, pid, int(q), key)
@@ -568,22 +683,22 @@ def handle_update(u):
                         save_orders()
                         USER_STATE[str(chat_id)] = {"step": "proof", "order_id": oid}
                         send(chat_id,
-                             "📸 <b>أرسل دليل الدفع:</b>\n\n"
-                             "• لقطة شاشة للتحويل، <b>أو</b>\n"
-                             "• رقم العملية (TxID / 🆔)\n\n"
-                             "اكتب الرقم أو أرسل الصورة هنا 👇")
-                        answer = "أرسل الدليل"
+                             f"{t('send_proof', chat_id)}\n\n"
+                             f"{t('proof_or', chat_id)}\n"
+                             f"{t('proof_txid', chat_id)}\n\n"
+                             f"{t('proof_here', chat_id)}")
+                        answer = t("ans_proof", chat_id)
                     else:
-                        answer = "الطلب قيد المعالجة."
+                        answer = t("order_busy", chat_id)
                 else:
-                    answer = "الطلب غير موجود."
+                    answer = t("order_gone", chat_id)
             elif data.startswith("cancel:"):
                 oid = data[7:]
                 o = ORDERS.get(oid)
                 if o and str(o["user_chat_id"]) == str(chat_id):
-                    o["status"] = "cancelled"; save_orders(); answer = "تم إلغاء الطلب ❌"
+                    o["status"] = "cancelled"; save_orders(); answer = t("cancelled", chat_id)
                 else:
-                    answer = "الطلب غير موجود."
+                    answer = t("order_gone", chat_id)
             elif data.startswith("approve:"):
                 answer = admin_decision(chat_id, data[8:], True)
             elif data.startswith("reject:"):
@@ -605,11 +720,11 @@ def handle_update(u):
     if st and st.get("step") == "qty_custom" and text.isdigit():
         q = int(text)
         if q < 1 or q > 999:
-            send(chat_id, "⚠️ العدد يجب أن يكون بين 1 و 999."); return
+            send(chat_id, t("qty_range", chat_id)); return
         pid = st["product_id"]
         p = next((x for x in refresh_products() if str(x.get("id")) == str(pid)), None)
         if p and q > stock_of(p) and stock_of(p) < 999:
-            send(chat_id, f"⚠️ المخزون المتوفر: {stock_of(p)} فقط."); return
+            send(chat_id, t("stock_only", chat_id).format(n=stock_of(p))); return
         show_payment_methods(chat_id, pid, q)
         return
 
@@ -624,7 +739,7 @@ def handle_update(u):
             o["proof_text"] = text[:200]
             save_orders()
             USER_STATE.pop(str(chat_id), None)
-            send(chat_id, "✅ توصلنا برقم العملية. سيتم مراجعة طلبك قريباً ⏳")
+            send(chat_id, t("txid_ok", chat_id))
             notify_admin_proof(o, oid, user_name, chat_id, f"🆔 رقم العملية:\n<code>{esc(text[:200])}</code>")
             return
 
@@ -632,41 +747,34 @@ def handle_update(u):
         send(chat_id, f"🆔 <code>{chat_id}</code>"); return
     if text.startswith("/start"):
         handle_start(chat_id, user_name); return
-    if "المتجر" in text:
+    low = text.lower()
+    if any(k in low for k in ("المتجر", "shop", "магазин")):
         show_brands(chat_id); return
-    if "طلبات" in text:
+    if any(k in low for k in ("طلبات", "order", "заказ")):
         mine = [o for o in ORDERS.values() if str(o["user_chat_id"]) == str(chat_id)]
         if not mine:
-            send(chat_id, "🧾 لا توجد طلبات بعد.")
+            send(chat_id, t("no_orders", chat_id))
         else:
             lines = []
             for o in sorted(mine, key=lambda x: -x["created_at"])[:10]:
-                st_map = {"awaiting_payment": "⏳ بانتظار الدفع",
-                          "awaiting_approval": "🔍 قيد المراجعة",
-                          "delivered": "✅ تم التسليم",
-                          "rejected": "❌ مرفوض", "cancelled": "🚫 ملغي"}
                 lines.append(f"📦 {esc(o['product_name'])} × {o['qty']} — "
-                             f"${o['total']} ({st_map.get(o['status'], o['status'])})")
-            send(chat_id, "🧾 <b>طلباتي:</b>\n\n" + "\n\n".join(lines))
+                             f"${o['total']} ({status_label(o['status'], chat_id)})")
+            send(chat_id, t("orders_title", chat_id) + "\n\n" + "\n\n".join(lines))
         return
-    if "شحن" in text:
-        kb = {"inline_keyboard": [
-            [{"text": f"{m.get('emoji','💳')} {m['name']}", "callback_data": "topup_info"}]
-            for m in PAYMENT_METHODS]}
+    if any(k in low for k in ("شحن", "topup", "top up", "баланс", "пополн")):
         send(chat_id,
-             "💳 <b>شحن الرصيد</b>\n\nاختر طريقة الدفع وتواصل مع الإدارة:\n"
-             f"👤 @{SUPPORT_USER}",
-             {"inline_keyboard": [[{"text": f"💬 تواصل مع الدعم",
+             f"{t('topup_title', chat_id)}\n👤 @{SUPPORT_USER}",
+             {"inline_keyboard": [[{"text": t("contact_support", chat_id),
                                     "url": f"https://t.me/{SUPPORT_USER}"}]]})
         return
-    if "مساعدة" in text:
+    if any(k in low for k in ("مساعدة", "help", "помощь")):
         send(chat_id,
-             f"❓ <b>مساعدة</b>\n\n"
-             f"🛍️ المتجر — تصفح المنتجات والشراء\n"
-             f"🧾 طلباتي — تتبع طلباتك\n"
-             f"💳 شحن الرصيد — طرق الدفع\n\n"
-             f"للتواصل المباشر: @{SUPPORT_USER}",
-             {"inline_keyboard": [[{"text": "💬 الدعم",
+             f"{t('help_title', chat_id)}\n\n"
+             f"{t('help_shop', chat_id)}\n"
+             f"{t('help_orders', chat_id)}\n"
+             f"{t('help_topup', chat_id)}\n\n"
+             f"{t('help_contact', chat_id)} @{SUPPORT_USER}",
+             {"inline_keyboard": [[{"text": t("support_word", chat_id),
                                     "url": f"https://t.me/{SUPPORT_USER}"}]]})
         return
     if msg.get("photo"):
@@ -674,9 +782,9 @@ def handle_update(u):
     pend = [o for o in ORDERS.values()
             if str(o["user_chat_id"]) == str(chat_id) and o["status"] == "awaiting_payment"]
     if pend:
-        send(chat_id, "📸 أرسل لقطة شاشة للتحويل لإتمام طلبك.")
+        send(chat_id, t("need_screenshot", chat_id))
     else:
-        send(chat_id, "🛍️ مرحباً بك!\nاختر من القائمة بالأسفل 👇", main_keyboard())
+        send(chat_id, t("hello_choose", chat_id), main_keyboard(chat_id))
 
 # ------------------------------------------------------------------ server -
 
