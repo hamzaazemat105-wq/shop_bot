@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v7"
+VERSION = "2026-10-06-v8"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -1124,6 +1124,13 @@ def handle_update(u):
         else:
             lines = [f"#{esc(k)} — <b>{esc(v)}</b>" for k, v in sorted(PNAMES.items())]
             send(chat_id, "📝 الأسماء المخصصة:\n\n" + "\n".join(lines))
+        return
+    if is_admin and text.startswith("/rawapi"):
+        prods = refresh_products(force=True)
+        if not prods:
+            send(chat_id, "الـ API رجع لائحة خاوية!"); return
+        raw = json.dumps(prods[0], ensure_ascii=False, indent=1)[:3500]
+        send(chat_id, f"📡 أول منتج من الـ API (عدد المنتجات: {len(prods)}):\n<pre>{esc(raw)}</pre>")
         return
     low = text.lower()
     if any(k in low for k in ("المتجر", "shop", "магазин")):
