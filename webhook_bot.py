@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v10"
+VERSION = "2026-10-06-v11"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -478,14 +478,30 @@ def brand_of(p):
         if isinstance(v, str) and v.strip():
             return v.strip()
     # extract brand from product name: "Gemini 18 month link..." -> "Gemini"
+    # normalized case-insensitively so "CAPCUT"/"Capcut" merge into one brand
     name = prod_name(p)
     if name and not name.startswith("#"):
         words = name.split()
         if words:
-            first = "".join(c for c in words[0] if c.isalnum())
+            first = "".join(c for c in words[0] if c.isalnum()).lower()
             if 2 <= len(first) <= 20:
-                return first[0].upper() + first[1:]
+                return _CANONICAL_BRANDS.get(first, first.title())
     return "عام"
+
+_CANONICAL_BRANDS = {
+    "capcut": "CapCut", "chatgpt": "ChatGPT", "api": "API",
+    "edx": "edX", "ilovepdf": "iLovePdf", "tiktok": "TikTok",
+    "youtube": "YouTube", "gmail": "Gmail", "grok": "Grok",
+    "claude": "Claude", "canva": "Canva", "figma": "Figma",
+    "notion": "Notion", "miro": "Miro", "zoom": "Zoom",
+    "spotify": "Spotify", "netflix": "Netflix", "adobe": "Adobe",
+    "discord": "Discord", "paypal": "PayPal", "hbo": "HBO",
+    "coursera": "Coursera", "udemy": "Udemy", "duolingo": "Duolingo",
+    "linkedin": "LinkedIn", "outlook": "Outlook", "office": "Office",
+    "telegram": "Telegram", "cursor": "Cursor", "lovable": "Lovable",
+    "fortnite": "Fortnite", "jetbrains": "JetBrains", "autodesk": "Autodesk",
+    "amazon": "Amazon", "apple": "Apple",
+}
 
 def stock_of(p):
     for k in ("stock", "quantity", "available", "count"):

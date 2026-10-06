@@ -1,1 +1,1 @@
-# stdlib only — no dependencies needed
+Pillow>=10.0.0
