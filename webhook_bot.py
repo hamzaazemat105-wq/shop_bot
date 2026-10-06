@@ -120,6 +120,45 @@ ORDERS.update(_load_json(ORDERS_FILE))
 LANGS.update(_load_json(LANGS_FILE))
 print(f"loaded {len(ORDERS)} orders, {len(LANGS)} lang prefs from disk")
 
+# ------------------------------------------------- wallets -------------
+# Per-customer wallet balances + top-up requests, persisted on disk.
+WALLETS = {}           # chat_id(str) -> float balance
+TOPUPS = {}            # tid -> topup dict
+WALLETS_FILE = os.path.join(_HERE, "wallets.json")
+TOPUPS_FILE = os.path.join(_HERE, "topups.json")
+
+def save_wallets():
+    _save_json(WALLETS_FILE, WALLETS)
+
+def save_topups():
+    _save_json(TOPUPS_FILE, TOPUPS)
+
+WALLETS.update(_load_json(WALLETS_FILE))
+TOPUPS.update(_load_json(TOPUPS_FILE))
+print(f"loaded {len(WALLETS)} wallets, {len(TOPUPS)} topups from disk")
+
+def get_balance(chat_id):
+    try:
+        return round(float(WALLETS.get(str(chat_id), 0.0)), 2)
+    except Exception:
+        return 0.0
+
+def add_balance(chat_id, amount):
+    WALLETS[str(chat_id)] = round(get_balance(chat_id) + float(amount), 2)
+    save_wallets()
+    return WALLETS[str(chat_id)]
+
+def refund_order_to_wallet(o):
+    """Refund a wallet-paid order; returns new balance or None."""
+    if o.get("wallet_paid") and not o.get("refunded"):
+        o["refunded"] = True
+        bal = add_balance(o["user_chat_id"], o["total"])
+        save_orders()
+        send(o["user_chat_id"],
+             t("refunded", o["user_chat_id"]).format(a=o["total"], b=bal))
+        return bal
+    return None
+
 # ------------------------------------------------------------------- i18n ---
 
 STRINGS = {
@@ -248,6 +287,41 @@ STRINGS = {
     "delivered_short":  {"ar": "🎉 تم تأكيد طلبك! سيتواصل معك المدير.",
                          "en": "🎉 Your order is confirmed! The manager will contact you.",
                          "ru": "🎉 Ваш заказ подтверждён! Менеджер свяжется с вами."},
+    "wallet_balance":   {"ar": "💰 <b>رصيد محفظتك:</b> <b>${b}</b>",
+                         "en": "💰 <b>Your wallet balance:</b> <b>${b}</b>",
+                         "ru": "💰 <b>Баланс кошелька:</b> <b>${b}</b>"},
+    "topup_btn":        {"ar": "➕ شحن المحفظة", "en": "➕ Top up wallet", "ru": "➕ Пополнить кошелёк"},
+    "topup_amount":     {"ar": "💵 <b>اختر مبلغ الشحن:</b>",
+                         "en": "💵 <b>Choose top-up amount:</b>",
+                         "ru": "💵 <b>Выберите сумму пополнения:</b>"},
+    "custom_amount":    {"ar": "✏️ مبلغ مخصص", "en": "✏️ Custom amount", "ru": "✏️ Своя сумма"},
+    "write_amount":     {"ar": "✏️ <b>اكتب مبلغ الشحن بالدولار</b> (رقم فقط):",
+                         "en": "✏️ <b>Type the top-up amount in USD</b> (numbers only):",
+                         "ru": "✏️ <b>Введите сумму пополнения в USD</b> (только цифры):"},
+    "amount_range":     {"ar": "⚠️ المبلغ يجب أن يكون بين 1 و 10000.", "en": "⚠️ Amount must be between 1 and 10000.", "ru": "⚠️ Сумма должна быть от 1 до 10000."},
+    "topup_pay_title":  {"ar": "💳 <b>شحن المحفظة — اختر طريقة الدفع:</b>",
+                         "en": "💳 <b>Wallet top-up — choose payment method:</b>",
+                         "ru": "💳 <b>Пополнение кошелька — выберите способ оплаты:</b>"},
+    "topup_confirm":    {"ar": "🧾 <b>تأكيد شحن المحفظة</b>",
+                         "en": "🧾 <b>Confirm wallet top-up</b>",
+                         "ru": "🧾 <b>Подтверждение пополнения</b>"},
+    "f_amount":         {"ar": "💵 المبلغ:", "en": "💵 Amount:", "ru": "💵 Сумма:"},
+    "topup_ok":         {"ar": "✅ تم شحن محفظتك بـ <b>${a}</b>!\n💰 رصيدك الحالي: <b>${b}</b>",
+                         "en": "✅ Your wallet was topped up with <b>${a}</b>!\n💰 Current balance: <b>${b}</b>",
+                         "ru": "✅ Кошелёк пополнен на <b>${a}</b>!\n💰 Текущий баланс: <b>${b}</b>"},
+    "topup_rejected":   {"ar": "❌ تم رفض طلب الشحن. تواصل مع الدعم.",
+                         "en": "❌ Top-up request rejected. Contact support.",
+                         "ru": "❌ Запрос пополнения отклонён. Свяжитесь с поддержкой."},
+    "pay_wallet":       {"ar": "👛 المحفظة", "en": "👛 Wallet", "ru": "👛 Кошелёк"},
+    "wallet_insuff":    {"ar": "⚠️ رصيد محفظتك غير كافٍ.\n💰 رصيدك: <b>${b}</b> — المطلوب: <b>${t}</b>\nاشحن محفظتك أولاً من 💳 شحن الرصيد.",
+                         "en": "⚠️ Insufficient wallet balance.\n💰 Yours: <b>${b}</b> — needed: <b>${t}</b>\nTop up first from 💳 Top up.",
+                         "ru": "⚠️ Недостаточно средств в кошельке.\n💰 У вас: <b>${b}</b> — нужно: <b>${t}</b>\nСначала пополните через 💳 Пополнить."},
+    "refunded":         {"ar": "↩️ تم إرجاع <b>${a}</b> إلى محفظتك.\n💰 رصيدك الحالي: <b>${b}</b>",
+                         "en": "↩️ <b>${a}</b> refunded to your wallet.\n💰 Current balance: <b>${b}</b>",
+                         "ru": "↩️ <b>${a}</b> возвращено в кошелёк.\n💰 Текущий баланс: <b>${b}</b>"},
+    "wallet_deducted":  {"ar": "👛 تم خصم <b>${a}</b> من محفظتك.",
+                         "en": "👛 <b>${a}</b> deducted from your wallet.",
+                         "ru": "👛 <b>${a}</b> списано с кошелька."},
 }
 
 def get_lang(chat_id):
@@ -477,6 +551,9 @@ def show_payment_methods(chat_id, pid, qty):
     total = round(cust_price(p) * qty, 2)
     USER_STATE[str(chat_id)] = {"step": "pay", "product_id": pid, "qty": qty, "total": total}
     kb = []
+    bal = get_balance(chat_id)
+    kb.append([{"text": f"{t('pay_wallet', chat_id)} (💰 ${bal})",
+                "callback_data": f"pay:{pid}:{qty}:wallet"}])
     for m in PAYMENT_METHODS:
         kb.append([{"text": f"{m.get('emoji','💳')} {m['name']}",
                     "callback_data": f"pay:{pid}:{qty}:{m['key']}"}])
@@ -490,19 +567,48 @@ def show_payment_methods(chat_id, pid, qty):
 def create_order(chat_id, user_name, pid, qty, pay_key):
     p = next((x for x in refresh_products() if str(x.get("id")) == str(pid)), None)
     if not p: return
-    m = next((x for x in PAYMENT_METHODS if x["key"] == pay_key), None)
-    if not m: return
     total = round(cust_price(p) * qty, 2)
+    wallet_pay = (pay_key == "wallet")
+    if wallet_pay:
+        bal = get_balance(chat_id)
+        if bal < total:
+            send(chat_id, t("wallet_insuff", chat_id).format(b=bal, t=total),
+                 back_to_menu_kb(chat_id))
+            return
+        add_balance(chat_id, -total)
+        m_name = f"{t('pay_wallet', chat_id)} (💰 ${get_balance(chat_id)})"
+        m_instr = t("wallet_deducted", chat_id).format(a=total)
+    else:
+        m = next((x for x in PAYMENT_METHODS if x["key"] == pay_key), None)
+        if not m: return
+        m_name, m_instr = m["name"], m.get("instructions", "")
     oid = f"{chat_id}:{pid}:{qty}:{int(time.time())}"
     ORDERS[oid] = {
         "user_chat_id": chat_id, "user_name": user_name,
         "product_id": p["id"], "product_name": prod_name(p),
         "qty": qty, "unit_price": cust_price(p), "total": total,
-        "pay_method": m["name"], "pay_key": pay_key,
-        "status": "awaiting_payment", "created_at": int(time.time()),
+        "pay_method": m_name, "pay_key": pay_key,
+        "wallet_paid": wallet_pay,
+        "status": "awaiting_payment" if not wallet_pay else "awaiting_approval",
+        "created_at": int(time.time()),
     }
     save_orders()
     USER_STATE.pop(str(chat_id), None)
+    if wallet_pay:
+        # Paid from wallet: straight to admin review, no external payment needed
+        kb_w = {"inline_keyboard": [
+            [{"text": t("cancel_btn", chat_id), "callback_data": f"cancel:{oid}"}]]}
+        send(chat_id,
+             f"{t('order_title', chat_id)}\n\n"
+             f"{t('f_product', chat_id)} <b>{esc(prod_name(p))}</b>\n"
+             f"{t('f_qty', chat_id)} <b>{qty}</b>\n"
+             f"{t('f_total', chat_id)} <b>${total}</b>\n"
+             f"{t('f_payvia', chat_id)} <b>{esc(m_name)}</b>\n\n"
+             f"{m_instr}\n\n{t('proof_ok', chat_id)}",
+             kb_w)
+        notify_admin_proof(ORDERS[oid], oid, user_name, chat_id,
+                           f"👛 <b>مدفوع من المحفظة</b> — لا يلزم إثبات.")
+        return
     kb = {"inline_keyboard": [
         [{"text": t("paid_btn", chat_id), "callback_data": f"paid:{oid}"}],
         [{"text": t("cancel_btn", chat_id), "callback_data": f"cancel:{oid}"}]]}
@@ -511,13 +617,93 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
          f"{t('f_product', chat_id)} <b>{esc(prod_name(p))}</b>\n"
          f"{t('f_qty', chat_id)} <b>{qty}</b>\n"
          f"{t('f_total', chat_id)} <b>${total}</b>\n"
-         f"{t('f_payvia', chat_id)} <b>{esc(m['name'])}</b>\n\n"
-         f"{t('f_instr', chat_id)}\n{esc(m.get('instructions',''))}\n\n"
+         f"{t('f_payvia', chat_id)} <b>{esc(m_name)}</b>\n\n"
+         f"{t('f_instr', chat_id)}\n{esc(m_instr)}\n\n"
          f"{t('step1', chat_id)}\n"
          f"{t('step2', chat_id)}\n"
          f"{t('step3', chat_id)}\n\n"
          f"{t('deliver_after', chat_id)}",
          kb)
+
+# ------------------------------------------------------------ wallet topup -
+
+def show_topup_amounts(chat_id):
+    kb = {"inline_keyboard": [
+        [{"text": "$10", "callback_data": "tupamt:10"},
+         {"text": "$20", "callback_data": "tupamt:20"},
+         {"text": "$50", "callback_data": "tupamt:50"}],
+        [{"text": "$100", "callback_data": "tupamt:100"},
+         {"text": t("custom_amount", chat_id), "callback_data": "tupamt:custom"}],
+        [{"text": t("back", chat_id), "callback_data": "menu:topup"}],
+    ]}
+    send(chat_id,
+         f"{t('wallet_balance', chat_id).format(b=get_balance(chat_id))}\n\n"
+         f"{t('topup_amount', chat_id)}", kb)
+
+def show_topup_methods(chat_id, amount):
+    kb = []
+    for m in PAYMENT_METHODS:
+        kb.append([{"text": f"{m.get('emoji','💳')} {m['name']}",
+                    "callback_data": f"tuppay:{amount}:{m['key']}"}])
+    kb.append([{"text": t("back", chat_id), "callback_data": "topup:start"}])
+    send(chat_id,
+         f"{t('topup_pay_title', chat_id)}\n\n"
+         f"{t('f_amount', chat_id)} <b>${amount}</b>",
+         {"inline_keyboard": kb})
+
+def create_topup(chat_id, user_name, amount, pay_key):
+    m = next((x for x in PAYMENT_METHODS if x["key"] == pay_key), None)
+    if not m: return
+    tid = f"tup:{chat_id}:{int(time.time())}"
+    TOPUPS[tid] = {
+        "user_chat_id": chat_id, "user_name": user_name,
+        "amount": amount, "pay_method": m["name"], "pay_key": pay_key,
+        "status": "awaiting_payment", "created_at": int(time.time()),
+    }
+    save_topups()
+    USER_STATE.pop(str(chat_id), None)
+    kb = {"inline_keyboard": [
+        [{"text": t("paid_btn", chat_id), "callback_data": f"tuppaid:{tid}"}],
+        [{"text": t("cancel_btn", chat_id), "callback_data": f"tupcancel:{tid}"}]]}
+    send(chat_id,
+         f"{t('topup_confirm', chat_id)}\n\n"
+         f"{t('f_amount', chat_id)} <b>${amount}</b>\n"
+         f"{t('f_payvia', chat_id)} <b>{esc(m['name'])}</b>\n\n"
+         f"{t('f_instr', chat_id)}\n{esc(m.get('instructions',''))}\n\n"
+         f"{t('step1', chat_id)}\n"
+         f"{t('step2', chat_id)}\n"
+         f"{t('step3', chat_id)}",
+         kb)
+
+def notify_admin_topup(tp, tid, proof_block):
+    if not ADMIN_CHAT_ID:
+        print("NO ADMIN; topup awaiting:", tid); return
+    kb = {"inline_keyboard": [[
+        {"text": "✅ تأكيد الشحن", "callback_data": f"tupok:{tid}"},
+        {"text": "❌ رفض", "callback_data": f"tupno:{tid}"}]]}
+    send(ADMIN_CHAT_ID,
+         f"💰 <b>طلب شحن محفظة جديد</b>\n\n"
+         f"👤 الزبون: {esc(tp['user_name'])} (<code>{tp['user_chat_id']}</code>)\n"
+         f"💵 المبلغ: <b>${tp['amount']}</b>\n"
+         f"💳 الدفع: {esc(tp['pay_method'])}\n"
+         f"🔖 الرقم: <code>{esc(tid)}</code>\n\n{proof_block}", kb)
+
+def admin_topup_decision(chat_id, tid, approve):
+    if not ADMIN_CHAT_ID or str(chat_id) != str(ADMIN_CHAT_ID):
+        return "⛔ غير مصرح."
+    tp = TOPUPS.get(tid)
+    if not tp or tp["status"] != "awaiting_approval":
+        return "⚠️ الطلب غير موجود أو تمت معالجته."
+    if not approve:
+        tp["status"] = "rejected"
+        save_topups()
+        send(tp["user_chat_id"], t("topup_rejected", tp["user_chat_id"]))
+        return "تم رفض الشحن."
+    tp["status"] = "credited"
+    save_topups()
+    bal = add_balance(tp["user_chat_id"], tp["amount"])
+    send(tp["user_chat_id"], t("topup_ok", tp["user_chat_id"]).format(a=tp["amount"], b=bal))
+    return "✅ تم شحن المحفظة."
 
 # ---------------------------------------------------------------- handlers -
 
@@ -544,9 +730,12 @@ def handle_menu(chat_id, section, user_name):
     elif section == "reservations":
         send(chat_id, t("reserv_title", chat_id), back_to_menu_kb(chat_id))
     elif section == "topup":
+        bal = get_balance(chat_id)
         send(chat_id,
+             f"{t('wallet_balance', chat_id).format(b=bal)}\n\n"
              f"{t('topup_title', chat_id)}\n👤 @{SUPPORT_USER}",
              {"inline_keyboard": [
+                 [{"text": t("topup_btn", chat_id), "callback_data": "topup:start"}],
                  [{"text": t("contact_support", chat_id), "url": f"https://t.me/{SUPPORT_USER}"}],
                  [{"text": t("back_menu", chat_id), "callback_data": "menu:main"}]]})
     elif section == "referral":
@@ -592,6 +781,21 @@ def notify_admin_proof(o, oid, user_name, chat_id, proof_block):
          f"🔖 الرقم: <code>{esc(oid)}</code>\n\n{proof_block}", kb)
 
 def handle_photo(chat_id, message_id, user_name):
+    # top-up proof photo?
+    st = USER_STATE.get(str(chat_id))
+    if st and st.get("step") == "tup_proof":
+        tid = st.get("topup_id")
+        tp = TOPUPS.get(tid)
+        if tp and tp["status"] == "awaiting_proof":
+            tp["status"] = "awaiting_approval"
+            tp["proof_type"] = "photo"
+            save_topups()
+            USER_STATE.pop(str(chat_id), None)
+            send(chat_id, t("proof_ok", chat_id))
+            notify_admin_topup(tp, tid, "📸 إثبات الدفع (صورة) 👇")
+            tg("forwardMessage", {"chat_id": ADMIN_CHAT_ID, "from_chat_id": chat_id,
+                                  "message_id": message_id})
+            return
     pend = [(oid, o) for oid, o in ORDERS.items()
             if str(o["user_chat_id"]) == str(chat_id)
             and o["status"] in ("awaiting_payment", "awaiting_proof")]
@@ -617,6 +821,7 @@ def admin_decision(chat_id, oid, approve):
     if not approve:
         o["status"] = "rejected"
         save_orders()
+        refund_order_to_wallet(o)
         send(o["user_chat_id"], t("rejected_msg", o["user_chat_id"]))
         return "تم رفض الطلب."
     # auto-buy from supplier
@@ -692,11 +897,62 @@ def handle_update(u):
                         answer = t("order_busy", chat_id)
                 else:
                     answer = t("order_gone", chat_id)
+            elif data == "topup:start":
+                show_topup_amounts(chat_id)
+                answer = t("ans_done", chat_id)
+            elif data.startswith("tupamt:"):
+                amt = data[7:]
+                if amt == "custom":
+                    USER_STATE[str(chat_id)] = {"step": "tup_amount_custom"}
+                    send(chat_id, t("write_amount", chat_id))
+                    answer = t("ans_number", chat_id)
+                else:
+                    show_topup_methods(chat_id, amt)
+                    answer = t("ans_done", chat_id)
+            elif data.startswith("tuppay:"):
+                _, amt, key = data.split(":")
+                create_topup(chat_id, name, float(amt), key)
+                answer = t("ans_done", chat_id)
+            elif data.startswith("tuppaid:"):
+                tid = data[8:]
+                tp = TOPUPS.get(tid)
+                if tp and str(tp["user_chat_id"]) == str(chat_id):
+                    if tp["status"] == "awaiting_payment":
+                        tp["status"] = "awaiting_proof"
+                        save_topups()
+                        USER_STATE[str(chat_id)] = {"step": "tup_proof", "topup_id": tid}
+                        send(chat_id,
+                             f"{t('send_proof', chat_id)}\n\n"
+                             f"{t('proof_or', chat_id)}\n"
+                             f"{t('proof_txid', chat_id)}\n\n"
+                             f"{t('proof_here', chat_id)}")
+                        answer = t("ans_proof", chat_id)
+                    else:
+                        answer = t("order_busy", chat_id)
+                else:
+                    answer = t("order_gone", chat_id)
+            elif data.startswith("tupcancel:"):
+                tid = data[10:]
+                tp = TOPUPS.get(tid)
+                if tp and str(tp["user_chat_id"]) == str(chat_id):
+                    tp["status"] = "cancelled"; save_topups()
+                    answer = t("cancelled", chat_id)
+                else:
+                    answer = t("order_gone", chat_id)
+            elif data.startswith("tupok:"):
+                answer = admin_topup_decision(chat_id, data[6:], True)
+            elif data.startswith("tupno:"):
+                answer = admin_topup_decision(chat_id, data[6:], False)
             elif data.startswith("cancel:"):
                 oid = data[7:]
                 o = ORDERS.get(oid)
                 if o and str(o["user_chat_id"]) == str(chat_id):
-                    o["status"] = "cancelled"; save_orders(); answer = t("cancelled", chat_id)
+                    if o["status"] in ("awaiting_payment", "awaiting_proof", "awaiting_approval"):
+                        o["status"] = "cancelled"; save_orders()
+                        refund_order_to_wallet(o)
+                        answer = t("cancelled", chat_id)
+                    else:
+                        answer = t("order_busy", chat_id)
                 else:
                     answer = t("order_gone", chat_id)
             elif data.startswith("approve:"):
@@ -741,6 +997,35 @@ def handle_update(u):
             USER_STATE.pop(str(chat_id), None)
             send(chat_id, t("txid_ok", chat_id))
             notify_admin_proof(o, oid, user_name, chat_id, f"🆔 رقم العملية:\n<code>{esc(text[:200])}</code>")
+            return
+
+    # custom top-up amount input
+    st = USER_STATE.get(str(chat_id))
+    if st and st.get("step") == "tup_amount_custom" and text:
+        try:
+            amt = float(text.replace(",", "."))
+        except ValueError:
+            amt = 0
+        if amt < 1 or amt > 10000:
+            send(chat_id, t("amount_range", chat_id)); return
+        amt = round(amt, 2)
+        USER_STATE.pop(str(chat_id), None)
+        show_topup_methods(chat_id, amt)
+        return
+
+    # top-up proof text input (TxID)
+    st = USER_STATE.get(str(chat_id))
+    if st and st.get("step") == "tup_proof" and text:
+        tid = st.get("topup_id")
+        tp = TOPUPS.get(tid)
+        if tp and tp["status"] == "awaiting_proof":
+            tp["status"] = "awaiting_approval"
+            tp["proof_type"] = "txid"
+            tp["proof_text"] = text[:200]
+            save_topups()
+            USER_STATE.pop(str(chat_id), None)
+            send(chat_id, t("txid_ok", chat_id))
+            notify_admin_topup(tp, tid, f"🆔 رقم العملية:\n<code>{esc(text[:200])}</code>")
             return
 
     if text == "/myid":
