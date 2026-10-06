@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v16"
+VERSION = "2026-10-06-v17"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -728,7 +728,7 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
          f"{t('f_qty', chat_id)} <b>{qty}</b>\n"
          f"{t('f_total', chat_id)} <b>${total}</b>\n"
          f"{t('f_payvia', chat_id)} <b>{esc(m_name)}</b>\n\n"
-         f"{t('f_instr', chat_id)}\n{esc(m_instr)}\n\n"
+         f"{t('f_instr', chat_id)}\n{m_instr}\n\n"
          f"{t('step1', chat_id)}\n"
          f"{t('step2', chat_id)}\n"
          f"{t('step3', chat_id)}\n\n"
@@ -779,7 +779,7 @@ def create_topup(chat_id, user_name, amount, pay_key):
          f"{t('topup_confirm', chat_id)}\n\n"
          f"{t('f_amount', chat_id)} <b>${amount}</b>\n"
          f"{t('f_payvia', chat_id)} <b>{esc(m['name'])}</b>\n\n"
-         f"{t('f_instr', chat_id)}\n{esc(m.get('instructions',''))}\n\n"
+         f"{t('f_instr', chat_id)}\n{m.get('instructions','')}\n\n"
          f"{t('step1', chat_id)}\n"
          f"{t('step2', chat_id)}\n"
          f"{t('step3', chat_id)}",
