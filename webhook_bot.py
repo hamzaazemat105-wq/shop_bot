@@ -275,6 +275,10 @@ STRINGS = {
     "help_topup":       {"ar": "💳 شحن الرصيد — طرق الدفع", "en": "💳 Top up — payment methods", "ru": "💳 Пополнение — способы оплаты"},
     "help_contact":     {"ar": "للتواصل المباشر:", "en": "To contact us directly:", "ru": "Для прямой связи:"},
     "support_word":     {"ar": "💬 الدعم", "en": "💬 Support", "ru": "💬 Поддержка"},
+    "rk_shop":          {"ar": "🛍️ المتجر", "en": "🛍️ Shop", "ru": "🛍️ Магазин"},
+    "rk_orders":        {"ar": "📦 طلباتي", "en": "📦 My orders", "ru": "📦 Мои заказы"},
+    "rk_topup":         {"ar": "💳 شحن الرصيد", "en": "💳 Top up", "ru": "💳 Пополнить"},
+    "rk_help":          {"ar": "❓ مساعدة", "en": "❓ Help", "ru": "❓ Помощь"},
     "rejected_msg":     {"ar": "❌ تم رفض طلبك. تواصل مع الدعم للمزيد من المعلومات.",
                          "en": "❌ Your order was rejected. Contact support for more info.",
                          "ru": "❌ Ваш заказ отклонён. Свяжитесь с поддержкой."},
@@ -453,6 +457,13 @@ def main_keyboard(chat_id):
 
 def back_to_menu_kb(chat_id):
     return {"inline_keyboard": [[{"text": t("back_menu", chat_id), "callback_data": "menu:main"}]]}
+
+def reply_keyboard(chat_id):
+    """Persistent bottom keyboard, translated to the user's language."""
+    return {"keyboard": [
+        [{"text": t("rk_shop", chat_id)}, {"text": t("rk_orders", chat_id)}],
+        [{"text": t("rk_topup", chat_id)}, {"text": t("rk_help", chat_id)}],
+    ], "resize_keyboard": True}
 
 def show_main_menu(chat_id, name=""):
     send(chat_id, t("welcome", chat_id).format(name=esc(name)), main_keyboard(chat_id))
@@ -708,6 +719,8 @@ def admin_topup_decision(chat_id, tid, approve):
 # ---------------------------------------------------------------- handlers -
 
 def handle_start(chat_id, name):
+    # (re)send the persistent bottom keyboard in the user's language
+    send(chat_id, t("hello_choose", chat_id), reply_keyboard(chat_id))
     if ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID):
         send(chat_id, t("admin_hello", chat_id), main_keyboard(chat_id))
         return
@@ -858,7 +871,9 @@ def handle_update(u):
                 lang = data[5:]
                 if lang in ("ar", "en", "ru"):
                     set_lang(chat_id, lang)
-                send(chat_id, t("lang_set", chat_id), back_to_menu_kb(chat_id))
+                # refresh the persistent bottom keyboard in the new language
+                send(chat_id, t("lang_set", chat_id), reply_keyboard(chat_id))
+                show_main_menu(chat_id, name)
                 answer = t("ans_done", chat_id)
             elif data == "brands_refresh" or data == "back_brands":
                 show_brands(chat_id)
