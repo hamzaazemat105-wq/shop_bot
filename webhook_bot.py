@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v6"
+VERSION = "2026-10-06-v7"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -92,6 +92,7 @@ LANGS = {}           # chat_id(str) -> "ar" | "en" | "ru"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ORDERS_FILE = os.path.join(_HERE, "orders.json")
 LANGS_FILE = os.path.join(_HERE, "langs.json")
+NAMES_FILE = os.path.join(_HERE, "product_names.json")
 
 def _save_json(path, data):
     try:
@@ -139,6 +140,13 @@ def save_topups():
 WALLETS.update(_load_json(WALLETS_FILE))
 TOPUPS.update(_load_json(TOPUPS_FILE))
 print(f"loaded {len(WALLETS)} wallets, {len(TOPUPS)} topups from disk")
+
+# Admin-managed product names (supplier API gives no names)
+PNAMES = {}              # product_id(str) -> display name
+def save_pnames():
+    _save_json(NAMES_FILE, PNAMES)
+PNAMES.update(_load_json(NAMES_FILE))
+print(f"loaded {len(PNAMES)} product name overrides from disk")
 
 def get_balance(chat_id):
     try:
@@ -437,6 +445,9 @@ def refresh_products(force=False):
     return PRODUCTS["items"]
 
 def prod_name(p):
+    pid = str(p.get("id", ""))
+    if pid in PNAMES and PNAMES[pid].strip():
+        return PNAMES[pid].strip()
     for k in ("name", "title", "label", "product_name", "productName",
               "description", "desc", "summary"):
         v = p.get(k)
@@ -1089,6 +1100,31 @@ def handle_update(u):
         send(chat_id, f"🆔 <code>{chat_id}</code>"); return
     if text.startswith("/start"):
         handle_start(chat_id, user_name); return
+    # ---- admin: product name overrides ----
+    is_admin = ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID)
+    if is_admin and text.startswith("/setname"):
+        parts = text.split(None, 2)
+        if len(parts) < 3:
+            send(chat_id, "الاستعمال: <code>/setname 50 اسم المنتج</code>"); return
+        PNAMES[parts[1]] = parts[2].strip()
+        save_pnames()
+        send(chat_id, f"✅ تم حفظ الاسم للمنتج #{esc(parts[1])}:\n<b>{esc(parts[2].strip())}</b>")
+        return
+    if is_admin and text.startswith("/delname"):
+        parts = text.split(None, 1)
+        if len(parts) < 2 or parts[1] not in PNAMES:
+            send(chat_id, "الاستعمال: <code>/delname 50</code>"); return
+        del PNAMES[parts[1]]
+        save_pnames()
+        send(chat_id, f"🗑️ تم حذف الاسم المخصص للمنتج #{esc(parts[1])}")
+        return
+    if is_admin and text.startswith("/names"):
+        if not PNAMES:
+            send(chat_id, "لا توجد أسماء مخصصة بعد.\nالاستعمال: <code>/setname 50 اسم المنتج</code>")
+        else:
+            lines = [f"#{esc(k)} — <b>{esc(v)}</b>" for k, v in sorted(PNAMES.items())]
+            send(chat_id, "📝 الأسماء المخصصة:\n\n" + "\n".join(lines))
+        return
     low = text.lower()
     if any(k in low for k in ("المتجر", "shop", "магазин")):
         show_brands(chat_id); return
