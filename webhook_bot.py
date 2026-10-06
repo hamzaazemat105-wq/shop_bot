@@ -79,6 +79,33 @@ ORDERS = {}          # oid -> order dict
 USER_STATE = {}      # chat_id -> {"step":..., "product_id":..., "qty":...}
 PRODUCTS = {"items": [], "ts": 0}
 
+# ------------------------------------------------- persistence -----------
+# Orders survive Railway restarts/redeploys via a JSON file on disk.
+ORDERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orders.json")
+
+def save_orders():
+    try:
+        tmp = ORDERS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(ORDERS, f, ensure_ascii=False)
+        os.replace(tmp, ORDERS_FILE)
+    except Exception as e:
+        print("save_orders error:", e)
+
+def load_orders():
+    try:
+        with open(ORDERS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            ORDERS.update(data)
+            print(f"loaded {len(ORDERS)} orders from disk")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print("load_orders error:", e)
+
+load_orders()
+
 # ---------------------------------------------------------------- helpers --
 
 def tg(method, params=None):
@@ -353,6 +380,7 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
         "pay_method": m["name"], "pay_key": pay_key,
         "status": "awaiting_payment", "created_at": int(time.time()),
     }
+    save_orders()
     USER_STATE.pop(str(chat_id), None)
     kb = {"inline_keyboard": [
         [{"text": "✅ تم الدفع", "callback_data": f"paid:{oid}"}],
@@ -460,6 +488,7 @@ def handle_photo(chat_id, message_id, user_name):
     oid, o = pend[-1]
     o["status"] = "awaiting_approval"
     o["proof_type"] = "photo"
+    save_orders()
     USER_STATE.pop(str(chat_id), None)
     send(chat_id, "✅ توصلنا بإثبات الدفع. سيتم مراجعة طلبك قريباً ⏳")
     notify_admin_proof(o, oid, user_name, chat_id, "📸 إثبات الدفع (صورة) 👇")
@@ -474,6 +503,7 @@ def admin_decision(chat_id, oid, approve):
         return "⚠️ الطلب غير موجود أو تمت معالجته."
     if not approve:
         o["status"] = "rejected"
+        save_orders()
         send(o["user_chat_id"], "❌ تم رفض طلبك. تواصل مع الدعم للمزيد من المعلومات.")
         return "تم رفض الطلب."
     # auto-buy from supplier
@@ -485,6 +515,7 @@ def admin_decision(chat_id, oid, approve):
         send(o["user_chat_id"], "⚠️ حدث خطأ أثناء تجهيز طلبك. سيتواصل معك المدير قريباً.")
         return f"⚠️ فشل الشراء من المزود: {esc(res.get('error',''))}"
     o["status"] = "delivered"
+    save_orders()
     items = res.get("items", [])
     if items:
         body = "\n\n".join(f"<code>{esc(i)}</code>" for i in items)
@@ -537,6 +568,7 @@ def handle_update(u):
                 if o and str(o["user_chat_id"]) == str(chat_id):
                     if o["status"] == "awaiting_payment":
                         o["status"] = "awaiting_proof"
+                        save_orders()
                         USER_STATE[str(chat_id)] = {"step": "proof", "order_id": oid}
                         send(chat_id,
                              "📸 <b>أرسل دليل الدفع:</b>\n\n"
@@ -552,7 +584,7 @@ def handle_update(u):
                 oid = data[7:]
                 o = ORDERS.get(oid)
                 if o and str(o["user_chat_id"]) == str(chat_id):
-                    o["status"] = "cancelled"; answer = "تم إلغاء الطلب ❌"
+                    o["status"] = "cancelled"; save_orders(); answer = "تم إلغاء الطلب ❌"
                 else:
                     answer = "الطلب غير موجود."
             elif data.startswith("approve:"):
@@ -593,6 +625,7 @@ def handle_update(u):
             o["status"] = "awaiting_approval"
             o["proof_type"] = "txid"
             o["proof_text"] = text[:200]
+            save_orders()
             USER_STATE.pop(str(chat_id), None)
             send(chat_id, "✅ توصلنا برقم العملية. سيتم مراجعة طلبك قريباً ⏳")
             notify_admin_proof(o, oid, user_name, chat_id, f"🆔 رقم العملية:\n<code>{esc(text[:200])}</code>")
