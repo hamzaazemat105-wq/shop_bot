@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v12"
+VERSION = "2026-10-06-v13"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -1173,6 +1173,19 @@ def handle_update(u):
             send(chat_id, "الـ API رجع لائحة خاوية!"); return
         raw = json.dumps(prods[0], ensure_ascii=False, indent=1)[:3500]
         send(chat_id, f"📡 أول منتج من الـ API (عدد المنتجات: {len(prods)}):\n<pre>{esc(raw)}</pre>")
+        return
+    if is_admin and text.startswith("/supbalance"):
+        try:
+            me = shop("/api/me")
+            bal = me.get("balance", me.get("credit", me.get("funds", "?")))
+            user = me.get("username", me.get("name", me.get("id", "")))
+            send(chat_id,
+                 f"💰 <b>رصيدك عند المورّد</b>\n\n"
+                 f"👤 الحساب: <code>{esc(str(user))}</code>\n"
+                 f"💵 الرصيد: <b>${esc(str(bal))}</b>\n\n"
+                 f"لشحن الرصيد تواصل مع مول الـ API مباشرة.")
+        except Exception as e:
+            send(chat_id, f"⚠️ تعذر جلب الرصيد: {esc(str(e)[:200])}")
         return
     low = text.lower()
     if any(k in low for k in ("المتجر", "shop", "магазин")):
