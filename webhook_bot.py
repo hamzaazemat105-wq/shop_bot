@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v14"
+VERSION = "2026-10-06-v15"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -481,12 +481,18 @@ def brand_of(p):
     # normalized case-insensitively so "CAPCUT"/"Capcut" merge into one brand
     name = prod_name(p)
     if name and not name.startswith("#"):
+        name_low = name.lower()
+        # 1. search for known brands anywhere in the name (best match)
+        for key, canon in _CANONICAL_BRANDS.items():
+            if key in name_low:
+                return canon
+        # 2. try first meaningful word
         words = name.split()
-        if words:
-            first = "".join(c for c in words[0] if c.isalnum()).lower()
-            if 2 <= len(first) <= 20:
-                return _CANONICAL_BRANDS.get(first, first.title())
-    return "عام"
+        for w in words[:3]:
+            clean = "".join(c for c in w if c.isalnum()).lower()
+            if 2 <= len(clean) <= 20:
+                return _CANONICAL_BRANDS.get(clean, clean.title())
+    return "منتجات أخرى"
 
 _CANONICAL_BRANDS = {
     "capcut": "CapCut", "chatgpt": "ChatGPT", "api": "API",
