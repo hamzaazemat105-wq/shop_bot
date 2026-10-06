@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v8"
+VERSION = "2026-10-06-v9"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -444,10 +444,18 @@ def refresh_products(force=False):
         print("products fetch failed:", e)
     return PRODUCTS["items"]
 
-def prod_name(p):
+def prod_name(p, lang=None):
+    lang = lang or "en"
+    # 1. admin override always wins
     pid = str(p.get("id", ""))
     if pid in PNAMES and PNAMES[pid].strip():
         return PNAMES[pid].strip()
+    # 2. localized API names (name_ar / name_en / name_ru)
+    for k in (f"name_{lang}", "name_en", "name_ar", "name_ru"):
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    # 3. generic fallbacks
     for k in ("name", "title", "label", "product_name", "productName",
               "description", "desc", "summary"):
         v = p.get(k)
@@ -455,12 +463,28 @@ def prod_name(p):
             return v.strip()
     return f"#{p.get('id', '?')}"
 
+def prod_desc(p, lang=None):
+    lang = lang or "en"
+    for k in (f"description_{lang}", "description_en", "description_ar", "description_ru"):
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
 def brand_of(p):
     for k in ("brand", "category", "brand_name", "brandName", "cat",
               "group", "collection", "type"):
         v = p.get(k)
         if isinstance(v, str) and v.strip():
             return v.strip()
+    # extract brand from product name: "Gemini 18 month link..." -> "Gemini"
+    name = prod_name(p)
+    if name and not name.startswith("#"):
+        words = name.split()
+        if words:
+            first = "".join(c for c in words[0] if c.isalnum())
+            if 2 <= len(first) <= 20:
+                return first[0].upper() + first[1:]
     return "عام"
 
 def stock_of(p):
@@ -555,7 +579,7 @@ def show_brand_products(chat_id, brand):
         pid = p.get("id")
         st = stock_of(p)
         mark = "✅" if st > 0 else "❌"
-        label = sanitize_label(f"{mark} {prod_name(p)[:30]} — ${cust_price(p)}")
+        label = sanitize_label(f"{mark} {prod_name(p, get_lang(chat_id))[:30]} — ${cust_price(p)}")
         kb.append([{"text": label, "callback_data": f"product:{pid}"}])
     kb.append([{"text": t("back_brands", chat_id), "callback_data": "back_brands"}])
     send(chat_id,
@@ -566,9 +590,11 @@ def show_product_detail(chat_id, pid):
     p = next((x for x in refresh_products() if str(x.get("id")) == str(pid)), None)
     if not p:
         send(chat_id, t("product_missing", chat_id)); return
-    name, st, pr = prod_name(p), stock_of(p), cust_price(p)
+    name, st, pr = prod_name(p, get_lang(chat_id)), stock_of(p), cust_price(p)
     stock_txt = t("avail_n", chat_id).format(n=st) if st > 0 else t("not_avail", chat_id)
-    caption = (f"📦 <b>{esc(name)}</b>\n\n"
+    desc = prod_desc(p, get_lang(chat_id))
+    desc_line = f"\n📝 {esc(desc[:200])}\n" if desc else ""
+    caption = (f"📦 <b>{esc(name)}</b>\n{desc_line}\n"
                f"{t('price', chat_id)} <b>${pr}</b>\n"
                f"{t('stock_is', chat_id)} {stock_txt}\n")
     kb = {"inline_keyboard": [
@@ -600,7 +626,7 @@ def show_quantity(chat_id, pid):
     kb.append([{"text": t("back", chat_id), "callback_data": f"product:{pid}"}])
     USER_STATE[str(chat_id)] = {"step": "qty", "product_id": pid}
     send(chat_id,
-         f"{t('choose_qty', chat_id)}\n\n{esc(prod_name(p))}\n"
+         f"{t('choose_qty', chat_id)}\n\n{esc(prod_name(p, get_lang(chat_id)))}\n"
          f"💰 ${cust_price(p)} {t('per_unit', chat_id)}\n{t('avail_label', chat_id)} {st}",
          {"inline_keyboard": kb})
 
@@ -619,7 +645,7 @@ def show_payment_methods(chat_id, pid, qty):
     kb.append([{"text": t("back", chat_id), "callback_data": f"buy:{pid}"}])
     send(chat_id,
          f"{t('choose_pay', chat_id)}\n\n"
-         f"📦 {esc(prod_name(p))} × {qty}\n"
+         f"📦 {esc(prod_name(p, get_lang(chat_id)))} × {qty}\n"
          f"{t('f_total', chat_id)} <b>${total}</b>",
          {"inline_keyboard": kb})
 
@@ -644,7 +670,7 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
     oid = f"{chat_id}:{pid}:{qty}:{int(time.time())}"
     ORDERS[oid] = {
         "user_chat_id": chat_id, "user_name": user_name,
-        "product_id": p["id"], "product_name": prod_name(p),
+        "product_id": p["id"], "product_name": prod_name(p, get_lang(chat_id)),
         "qty": qty, "unit_price": cust_price(p), "total": total,
         "pay_method": m_name, "pay_key": pay_key,
         "wallet_paid": wallet_pay,
@@ -659,7 +685,7 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
             [{"text": t("cancel_btn", chat_id), "callback_data": f"cancel:{oid}"}]]}
         send(chat_id,
              f"{t('order_title', chat_id)}\n\n"
-             f"{t('f_product', chat_id)} <b>{esc(prod_name(p))}</b>\n"
+             f"{t('f_product', chat_id)} <b>{esc(prod_name(p, get_lang(chat_id)))}</b>\n"
              f"{t('f_qty', chat_id)} <b>{qty}</b>\n"
              f"{t('f_total', chat_id)} <b>${total}</b>\n"
              f"{t('f_payvia', chat_id)} <b>{esc(m_name)}</b>\n\n"
@@ -673,7 +699,7 @@ def create_order(chat_id, user_name, pid, qty, pay_key):
         [{"text": t("cancel_btn", chat_id), "callback_data": f"cancel:{oid}"}]]}
     send(chat_id,
          f"{t('order_title', chat_id)}\n\n"
-         f"{t('f_product', chat_id)} <b>{esc(prod_name(p))}</b>\n"
+         f"{t('f_product', chat_id)} <b>{esc(prod_name(p, get_lang(chat_id)))}</b>\n"
          f"{t('f_qty', chat_id)} <b>{qty}</b>\n"
          f"{t('f_total', chat_id)} <b>${total}</b>\n"
          f"{t('f_payvia', chat_id)} <b>{esc(m_name)}</b>\n\n"
