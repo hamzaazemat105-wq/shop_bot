@@ -56,6 +56,8 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
+VERSION = "2026-10-06-v6"
+
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
 
@@ -1132,6 +1134,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+        elif self.path == "/version":
+            self.send_response(200); self.end_headers()
+            self.wfile.write(f"bot-version:{VERSION}".encode())
         else:
             self.send_response(404); self.end_headers()
 
