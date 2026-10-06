@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v13"
+VERSION = "2026-10-06-v14"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -1174,7 +1174,7 @@ def handle_update(u):
         raw = json.dumps(prods[0], ensure_ascii=False, indent=1)[:3500]
         send(chat_id, f"📡 أول منتج من الـ API (عدد المنتجات: {len(prods)}):\n<pre>{esc(raw)}</pre>")
         return
-    if is_admin and text.startswith("/supbalance"):
+    if is_admin and (text.startswith("/supbalance") or text.startswith("/محفظتي") or text == "محفظتي"):
         try:
             me = shop("/api/me")
             bal = me.get("balance", me.get("credit", me.get("funds", "?")))
