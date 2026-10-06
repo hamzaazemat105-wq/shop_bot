@@ -435,11 +435,20 @@ def refresh_products(force=False):
     return PRODUCTS["items"]
 
 def prod_name(p):
-    return p.get("name") or p.get("title") or f"#{p.get('id')}"
+    for k in ("name", "title", "label", "product_name", "productName",
+              "description", "desc", "summary"):
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return f"#{p.get('id', '?')}"
 
 def brand_of(p):
-    b = (p.get("brand") or p.get("category") or "عام").strip()
-    return b or "عام"
+    for k in ("brand", "category", "brand_name", "brandName", "cat",
+              "group", "collection", "type"):
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return "عام"
 
 def stock_of(p):
     for k in ("stock", "quantity", "available", "count"):
