@@ -56,7 +56,7 @@ MARGIN = float(os.environ.get("MARGIN", "1.30"))
 SUPPORT_USER = os.environ.get("SUPPORT_USER", "hamzaazemat105").lstrip("@")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
-VERSION = "2026-10-06-v17"
+VERSION = "2026-10-06-v18"
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SHOP = f"https://{SHOP_BASE_URL}"
@@ -90,9 +90,11 @@ LANGS = {}           # chat_id(str) -> "ar" | "en" | "ru"
 # ------------------------------------------------- persistence -----------
 # Orders + languages survive Railway restarts/redeploys via JSON files on disk.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-ORDERS_FILE = os.path.join(_HERE, "orders.json")
-LANGS_FILE = os.path.join(_HERE, "langs.json")
-NAMES_FILE = os.path.join(_HERE, "product_names.json")
+# State on a Railway Volume (/data) so redeploys don't wipe it; container disk is ephemeral.
+STATE_DIR = os.environ.get("STATE_DIR", _HERE)
+ORDERS_FILE = os.path.join(STATE_DIR, "orders.json")
+LANGS_FILE = os.path.join(STATE_DIR, "langs.json")
+NAMES_FILE = os.path.join(STATE_DIR, "product_names.json")
 
 def _save_json(path, data):
     try:
@@ -128,8 +130,8 @@ print(f"loaded {len(ORDERS)} orders, {len(LANGS)} lang prefs from disk")
 # Per-customer wallet balances + top-up requests, persisted on disk.
 WALLETS = {}           # chat_id(str) -> float balance
 TOPUPS = {}            # tid -> topup dict
-WALLETS_FILE = os.path.join(_HERE, "wallets.json")
-TOPUPS_FILE = os.path.join(_HERE, "topups.json")
+WALLETS_FILE = os.path.join(STATE_DIR, "wallets.json")
+TOPUPS_FILE = os.path.join(STATE_DIR, "topups.json")
 
 def save_wallets():
     _save_json(WALLETS_FILE, WALLETS)
